@@ -1,0 +1,8 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = CXSystemLoader
+  PACKAGE_GUID                   = 4a512103-1377-471a-a5b2-1519d4c57880
+  PACKAGE_VERSION                = 0.1
+
+[Includes]
+  include
