@@ -7,7 +7,7 @@
 #include <System/Executables/OSELF.h>
 #define UIntN UINTN
 
-#define kCXKernelLoaderName  CXUTF16String("CXKSetup.elf")
+#define kCXKernelLoaderName  CXUTF16String("SLSetupKernel.elf")
 #define kCXKSetupLoadAddress 0x4000000
 
 bool CXValidateELFHeader(OSELFFileHeader64 *header)

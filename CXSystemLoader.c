@@ -5,11 +5,13 @@
 #include <Kernel/CXKPOST.h>
 #define UIntN UINTN
 
-#define kCXLoaderVersion "0.1"
-#define kCXLoaderBuild   "000C"
+#define kCXLoaderVersionA 'A'
+#define kCXLoaderVersionB '1'
+
+#define kCXLoaderVersion "A.1"
+#define kCXLoaderBuild   "000E"
 
 #define kCXLoaderStartTextU CXUTF16String("Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n")
-#define kCXLoaderStartText                "Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n"
 
 static CXKBasicSerialPort *gSerialPort0;
 static CXHandle gImageHandle;
@@ -149,10 +151,9 @@ UTF16String CXSystemLoaderGetLoaderPath(CXHandle imageHandle, CXSystemTable syst
     return CXDevicePathToString(image->filePath, true, false);
 }
 
-void serialPuts(const char *s)
+void CLSerialWrite(const char *string)
 {
-    //while (s) CXKBasicSerialPortWriteCharacter(gSerialPort0, *s++, true);
-    printf(CXUTF16String("serialPuts() called on string '%s' [0x%p]\r\n"), s, s);
+    while (s) CXKBasicSerialPortWriteCharacter(gSerialPort0, *s++, true);
 }
 
 void noSerialCheck()
@@ -175,14 +176,8 @@ void CXSerialSetup()
 {
     CXKBasicSerialPortSetupLineControl(gSerialPort0, kCXKBasicSerialWordLength8Bits, kCXKBasicSerial1StopBit, kCXKBasicSerialNoParity);
     CXKBasicSerialPortSetBaudRate(gSerialPort0, 57600);
-    serialPuts(kCXLoaderStartText);
 
-    const char *s1 = kCXLoaderStartText;
-    serialPuts(s1);
-
-    const char *s2 = "Hai\r\n";
-    serialPuts(s2);
-
+#if 0
     UInt8 interruptsEnabled = CXKReadByteFromPort(&gSerialPort0->byte1.interruptsEnabled);
     UInt8 interruptInfo = CXKReadByteFromPort(&gSerialPort0->byte2.interruptInfo);
     UInt8 lineControl = CXKReadByteFromPort(&gSerialPort0->lineControl);
@@ -207,12 +202,10 @@ void CXSerialSetup()
     printf(CXUTF16String("DL [0x%p]: %02X\r\n"), &gSerialPort0->byte0.divisorLSB, divisorLSB);
     printf(CXUTF16String("DH [0x%p]: %02X\r\n"), &gSerialPort0->byte1.divisorMSB, divisorMSB);
     printf(CXUTF16String("\r\n"));
+#endif
 
-    CXKBasicSerialPortWriteCharacter(gSerialPort0, 'h', true);
-    CXKBasicSerialPortWriteCharacter(gSerialPort0, 'a', true);
-    CXKBasicSerialPortWriteCharacter(gSerialPort0, 'i', true);
-    CXKBasicSerialPortWriteCharacter(gSerialPort0, '\r', true);
-    CXKBasicSerialPortWriteCharacter(gSerialPort0, '\n', true);
+    const char *startText = {'C', 'X', 'B', 'L', 'v', kCXLoaderVersionA, '.', kCXLoaderVersionB, '\r', '\n'};l
+    CLSerialWrite(startText);
 }
 
 #define kCXLoaderDirectory CXUTF16String("EFI\\corona")
@@ -273,14 +266,13 @@ void startLoadSetup(CXSystemTable *systemTable, CXHandle imageHandle)
 
 CXStatus CXEFI CXSystemLoaderMain(input CXHandle imageHandle, input CXSystemTable *systemTable)
 {
+    CXStatus status;
     gImageHandle = imageHandle;
     CXKSetPOSTValue(0xFF);
 
     printf(kCXLoaderStartTextU);
     gSerialPort0 = CXKBasicSerialPortIntializeAtAddress((OSAddress)kCXKBasicSerialDefaultOffset);
 
-    CXStatus status = printf(CXUTF16String("Hai Thar!\r\n\r\n"));
-    if (CXCheckIsError(status)) return status;
     if (!gSerialPort0) noSerialCheck();
     else               CXSerialSetup();
 
