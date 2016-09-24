@@ -195,20 +195,23 @@ void CXLoadSetupImage(CXFileHandle folderPath, CXSystemTable *systemTable, CXKBo
         CXKSetPOSTValue(0x0F);
     }
 
-    printf(CXUTF16String("Disabling EFI Boot Services..."));
+    printf(CXUTF16String("Will Call Entry at 0x%p.\r\n"), (OSAddress)(loadAddress + entryPoint));
+    printf(CXUTF16String("Disabling EFI Boot Services...\r\n"));
     CXLoaderReloadMemoryMap(systemTable, kernelArgs);
     status = systemTable->bootServices->disable((CXHandle)kernelArgs->loaderImage, (UIntN)kernelArgs->efiMemoryMapKey);
 
     if (CXCheckIsError(status)) {
-        printf(CXUTF16String(" Failed.\r\n"));
         CXKSetPOSTValue(0xDE);
         return;
     } else {
-        printf(CXUTF16String(" Success!\r\n"));
         CXKSetPOSTValue(0x10);
     }
 
+    // Re-Initialize Serial Port 0
+    kernelArgs->serialPort0 = CXKBasicSerialIntializeAtAddress(kernelArgs->serialPort0);
+    CXKBasicSerialSetupLineControl(kernelArgs->serialPort0, kCXKBasicSerialWordLength8Bits, kCXKBasicSerial1StopBit, kCXKBasicSerialNoParity);
+    CXKBasicSerialSetBaudRate(kernelArgs->serialPort0, 57600);
+
     void (*entry)(CXKBootArgs *args) = (void (*)())(loadAddress + entryPoint);
-    printf(CXUTF16String("Calling Entry at 0x%p...\r\n"), entry);
     entry(kernelArgs);
 }

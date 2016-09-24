@@ -10,7 +10,7 @@
 #define kCXLoaderVersionB '1'
 
 #define kCXLoaderVersion "A.1"
-#define kCXLoaderBuild   "0010"
+#define kCXLoaderBuild   "0011"
 
 #define kCXLoaderStartTextU CXUTF16String("Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n")
 
