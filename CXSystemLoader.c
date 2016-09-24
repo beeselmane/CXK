@@ -10,7 +10,7 @@
 #define kCXLoaderVersionB '1'
 
 #define kCXLoaderVersion "A.1"
-#define kCXLoaderBuild   "0011"
+#define kCXLoaderBuild   "0012"
 
 #define kCXLoaderStartTextU CXUTF16String("Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n")
 
@@ -198,8 +198,10 @@ void CXSerialSetup()
     printf(CXUTF16String("\r\n"));
 #endif
 
-    const char startText[11] = {'C', 'X', 'B', 'L', 'v', kCXLoaderVersionA, '.', kCXLoaderVersionB, '\r', '\n', '\0'};
-    for (int i = 0; i < 11; i++) SLPrintC(startText[i]);
+    const char startText[11] = {'C', 'X', 'B', 'L', 'v', kCXLoaderVersionA, '.', kCXLoaderVersionB, '\r', '\n'};
+    for (int i = 0; i < 10; i++) SLPrintC(startText[i]);
+
+    printf(CXUTF16String("serial0 is at 0x%p\r\n"), gSerialPort0);
 }
 
 #define kCXLoaderDirectory CXUTF16String("EFI\\corona")
@@ -255,6 +257,7 @@ void startLoadSetup(CXSystemTable *systemTable, CXHandle imageHandle)
         CXKSetPOSTValue(0x04);
     }
 
+    kernelArgs.serialPort0 = gSerialPort0;
     CXLoadSetupImage(folderPath, systemTable, &kernelArgs);
 }
 
@@ -271,7 +274,7 @@ CXStatus CXEFI CXSystemLoaderMain(input CXHandle imageHandle, input CXSystemTabl
     else               CXSerialSetup();
 
     printf(CXUTF16String("Loader Path: %s\r\n\r\n"), CXSystemLoaderGetLoaderPath(imageHandle, *systemTable));
-    status = CXSystemLoaderPrintMemoryMapStatistics(*systemTable);
+    //status = CXSystemLoaderPrintMemoryMapStatistics(*systemTable);
     status = CXSystemLoaderWaitForKey(*systemTable);
     startLoadSetup(systemTable, imageHandle);
     CXSystemLoaderWaitForKey(*systemTable);
