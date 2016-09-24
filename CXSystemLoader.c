@@ -6,7 +6,7 @@
 #define UIntN UINTN
 
 #define kCXLoaderVersion "0.1"
-#define kCXLoaderBuild   "000B"
+#define kCXLoaderBuild   "000C"
 
 #define kCXLoaderStartTextU CXUTF16String("Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n")
 #define kCXLoaderStartText                "Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n"
@@ -176,6 +176,12 @@ void CXSerialSetup()
     CXKBasicSerialPortSetupLineControl(gSerialPort0, kCXKBasicSerialWordLength8Bits, kCXKBasicSerial1StopBit, kCXKBasicSerialNoParity);
     CXKBasicSerialPortSetBaudRate(gSerialPort0, 57600);
     serialPuts(kCXLoaderStartText);
+
+    const char *s1 = kCXLoaderStartText;
+    serialPuts(s1);
+
+    const char *s2 = "Hai\r\n";
+    serialPuts(s2);
 
     UInt8 interruptsEnabled = CXKReadByteFromPort(&gSerialPort0->byte1.interruptsEnabled);
     UInt8 interruptInfo = CXKReadByteFromPort(&gSerialPort0->byte2.interruptInfo);
