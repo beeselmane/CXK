@@ -2,6 +2,7 @@
 #undef NULL
 #include <Kernel/CXKBasicSerial.h>
 #include <Kernel/CXKMemoryIO.h>
+#include <Kernel/CXKBootOptions.h>
 #include <Kernel/CXKPOST.h>
 #define UIntN UINTN
 
@@ -9,12 +10,13 @@
 #define kCXLoaderVersionB '1'
 
 #define kCXLoaderVersion "A.1"
-#define kCXLoaderBuild   "000F"
+#define kCXLoaderBuild   "0010"
 
 #define kCXLoaderStartTextU CXUTF16String("Corona-X System Loader Version " kCXLoaderVersion " [Build " kCXLoaderBuild "]\r\n")
 
 static CXKBasicSerialPort *gSerialPort0;
 static CXHandle gImageHandle;
+CXKBootArgs kernelArgs;
 
 UTF16String CXMemoryTypeToString(CXMemoryType type)
 {
@@ -76,16 +78,6 @@ CXStatus CXSystemLoaderWaitForKey(CXSystemTable systemTable)
     return status;
 }
 
-typedef struct {
-    UInt32 entryType;
-    UInt32 padding0;
-    OSAddress physicalAddress;
-    OSAddress virtualAddress;
-    UInt64 pageCount;
-    UInt64 attributes;
-    UInt64 padding1;
-} CXMemoryMapEntry;
-
 CXStatus CXSystemLoaderPrintMemoryMapStatistics(CXSystemTable systemTable)
 {
     UIntN memoryMapSize = 0;
@@ -102,14 +94,14 @@ CXStatus CXSystemLoaderPrintMemoryMapStatistics(CXSystemTable systemTable)
     printf(CXUTF16String("Memory Map Size: %lu (/ %lu) [s%lu]\r\n"), memoryMapSize, descriptorSize, sizeof(CXMemoryDescriptor));
     printf(CXUTF16String("Map Key: %lu, Descriptor Version: %u\r\n"), mapKey, descriptorVersion);
 
-    CXMemoryMapEntry *entryList = (CXMemoryMapEntry *)mmap;
+    CXKMemoryMapEntry *entryList = (CXKMemoryMapEntry *)mmap;
     UIntN descriptorCount = memoryMapSize / descriptorSize;
     UIntN osReserved = 0;
     UIntN memoryMax = 0;
 
     for (UIntN i = 0; i < descriptorCount; i++)
     {
-        CXMemoryMapEntry *entry = &entryList[i];
+        CXKMemoryMapEntry *entry = &entryList[i];
 
         if (CXIsRuntimeReserved((CXMemoryDescriptor *)entry))
             osReserved++;
@@ -172,6 +164,8 @@ void noSerialCheck()
     printf(CXUTF16String("Serial Port Unaccessable.\r\n\r\n"));
 }
 
+#define SLPrintC(c) CXKBasicSerialWriteCharacter(gSerialPort0, c, true)
+
 void CXSerialSetup()
 {
     CXKBasicSerialSetupLineControl(gSerialPort0, kCXKBasicSerialWordLength8Bits, kCXKBasicSerial1StopBit, kCXKBasicSerialNoParity);
@@ -205,13 +199,13 @@ void CXSerialSetup()
 #endif
 
     const char startText[11] = {'C', 'X', 'B', 'L', 'v', kCXLoaderVersionA, '.', kCXLoaderVersionB, '\r', '\n', '\0'};
-    CLSerialWrite(startText);
+    for (int i = 0; i < 11; i++) SLPrintC(startText[i]);
 }
 
 #define kCXLoaderDirectory CXUTF16String("EFI\\corona")
 ;
 
-extern void CXLoadSetupImage(CXFileHandle folderPath, CXSystemTable *systemTable);
+extern void CXLoadSetupImage(CXFileHandle folderPath, CXSystemTable *systemTable, CXKBootArgs *args);
 
 void startLoadSetup(CXSystemTable *systemTable, CXHandle imageHandle)
 {
@@ -261,7 +255,7 @@ void startLoadSetup(CXSystemTable *systemTable, CXHandle imageHandle)
         CXKSetPOSTValue(0x04);
     }
 
-    CXLoadSetupImage(folderPath, systemTable);
+    CXLoadSetupImage(folderPath, systemTable, &kernelArgs);
 }
 
 CXStatus CXEFI CXSystemLoaderMain(input CXHandle imageHandle, input CXSystemTable *systemTable)

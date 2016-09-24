@@ -98,4 +98,6 @@
 #define read                        Read
 #define clear                       ClearScreen
 
+#define disable                     ExitBootServices
+
 typedef unsigned long long CXSize;

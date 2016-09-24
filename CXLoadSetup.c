@@ -3,6 +3,7 @@
 #include <Kernel/CXKBasicSerial.h>
 #include <Kernel/CXKMemoryIO.h>
 #include <Kernel/CXKPOST.h>
+#include <Kernel/CXKBootOptions.h>
 
 #include <System/Executables/OSELF.h>
 #define UIntN UINTN
@@ -54,7 +55,24 @@ bool CXValidateELFHeader(OSELFFileHeader64 *header)
     return valid;
 }
 
-void CXLoadSetupImage(CXFileHandle folderPath, CXSystemTable *systemTable)
+void CXLoaderReloadMemoryMap(CXSystemTable *systemTable, CXKBootArgs *kernelArgs)
+{
+    UIntN memoryMapSize = 0;
+    CXMemoryDescriptor *mmap = NULL;
+    UIntN mapKey;
+    UIntN descriptorSize = 0;
+    UInt32 descriptorVersion = 0;
+
+    systemTable->bootServices->getMemoryMap(&memoryMapSize, mmap, &mapKey, &descriptorSize, &descriptorVersion);
+    systemTable->bootServices->allocate(kCXMemoryTypeBootData, memoryMapSize, (void **)&mmap);
+    systemTable->bootServices->getMemoryMap(&memoryMapSize, mmap, &mapKey, &descriptorSize, &descriptorVersion);
+
+    kernelArgs->efiMemoryMapKey = mapKey;
+    kernelArgs->efiMemoryMap = (CXKMemoryMapEntry *)mmap;
+    kernelArgs->efiMemoryMapEntryCount = memoryMapSize / descriptorSize;
+}
+
+void CXLoadSetupImage(CXFileHandle folderPath, CXSystemTable *systemTable, CXKBootArgs *kernelArgs)
 {
     CXFileHandle setupFile;
     CXKSetPOSTValue(0x05);
@@ -177,7 +195,20 @@ void CXLoadSetupImage(CXFileHandle folderPath, CXSystemTable *systemTable)
         CXKSetPOSTValue(0x0F);
     }
 
-    void (*entry)() = (void (*)())(loadAddress + entryPoint);
+    printf(CXUTF16String("Disabling EFI Boot Services..."));
+    CXLoaderReloadMemoryMap(systemTable, kernelArgs);
+    status = systemTable->bootServices->disable((CXHandle)kernelArgs->loaderImage, (UIntN)kernelArgs->efiMemoryMapKey);
+
+    if (CXCheckIsError(status)) {
+        printf(CXUTF16String(" Failed.\r\n"));
+        CXKSetPOSTValue(0xDE);
+        return;
+    } else {
+        printf(CXUTF16String(" Success!\r\n"));
+        CXKSetPOSTValue(0x10);
+    }
+
+    void (*entry)(CXKBootArgs *args) = (void (*)())(loadAddress + entryPoint);
     printf(CXUTF16String("Calling Entry at 0x%p...\r\n"), entry);
-    entry();
+    entry(kernelArgs);
 }
