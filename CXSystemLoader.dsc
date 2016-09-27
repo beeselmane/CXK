@@ -43,4 +43,4 @@
   CXSystemLoader/CXSystemLoader.inf
 
 [BuildOptions]
-  *_*_*_CC_FLAGS = -D DISABLE_NEW_DEPRECATED_INTERFACES -DkCXIsBuildingBootloader
+  *_*_*_CC_FLAGS = -DkCXBootloaderCode=1 -DkCXDebug=1

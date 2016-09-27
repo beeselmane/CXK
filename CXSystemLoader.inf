@@ -7,7 +7,9 @@
 
 [Sources]
     CXSystemLoader.c
-    CXLoadSetup.c
+    SLSetupLoader.c
+    SLLibrary.c
+    SLConfigFile.c
     SharedCode/CXKBasicSerial.c
 
 [Packages]
