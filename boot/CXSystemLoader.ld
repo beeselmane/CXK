@@ -3,7 +3,7 @@ ENTRY(_SLEntry);
 
 SECTIONS
 {
-    . = 0x000000;
+    . = 0x4000000;
     gSLLoaderBase = .;
 
     .hash : {

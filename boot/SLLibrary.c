@@ -1,305 +1,422 @@
 #include <SystemLoader/SystemLoader.h>
+#include <SystemLoader/SLLibrary.h>
+
+OSAddress SLGetMainImageHandle(void)
+{
+    return gSLLoaderImageHandle;
+}
+
+SLBootServices *SLBootServicesGetCurrent(void)
+{
+    return gSLLoaderSystemTable->bootServices;
+}
+
+SLRuntimeServices *SLRuntimeServicesGetCurrent(void)
+{
+    return gSLLoaderSystemTable->runtimeServices;
+}
+
+SLSystemTable *SLSystemTableGetCurrent(void)
+{
+    return gSLLoaderSystemTable;
+}
 
 bool SLBootServicesHaveTerminated(void)
 {
-    return true;
+    return !gSLBootServicesEnabled;
+}
+
+bool SLCheckStatus(SLStatus status)
+{
+    return !SLStatusIsError(status);
+}
+
+bool SLBootServicesAllocatePages(OSAddress base, OSCount pages)
+{
+    OSAddress result = base;
+    SLStatus status = gSLLoaderSystemTable->bootServices->allocatePages(kSLAllocTypeAtAddress, kSLMemoryTypeLoaderData, pages, &result);
+    if (!SLCheckStatus(status)) return false;
+    if (result != base) return false;
+    return base;
+}
+
+OSBuffer SLBootServicesAllocate(OSSize size)
+{
+    OSAddress result;
+    SLStatus status = gSLLoaderSystemTable->bootServices->allocate(kSLMemoryTypeLoaderData, size, &result);
+    if (!SLCheckStatus(status)) return kOSBufferEmpty;
+    return OSBufferMake(result, size);
+}
+
+bool SLBootServicesFree(OSBuffer buffer)
+{
+    SLStatus status = gSLLoaderSystemTable->bootServices->free(buffer.address);
+    return !SLCheckStatus(status);
+}
+
+CXKMemoryMap *SLBootServicesGetMemoryMap(void)
+{
+    OSBuffer buffer = SLBootServicesAllocate(sizeof(CXKMemoryMap));
+    if (OSBufferIsEmpty(buffer)) return kOSNullPointer;
+    CXKMemoryMap *map = buffer.address;
+    UIntN entrySize;
+    UInt32 version;
+
+    SLStatus status = gSLLoaderSystemTable->bootServices->getMemoryMap(&buffer.size, map->entries, &map->key, &entrySize, &version);
+    if (entrySize != sizeof(CXKMemoryMapEntry)) status = kSLStatusWrongSize;
+    if (status == kSLStatusBufferTooSmall) status = kSLStatusSuccess;
+    if (version != 1) status = kSLStatusIncompatibleVersion;
+    if (!SLCheckStatus(status)) goto failure;
+
+    map->entryCount = (buffer.size / entrySize) + 1;
+    buffer.size += entrySize;
+    buffer = SLBootServicesAllocate(buffer.size);
+    if (OSBufferIsEmpty(buffer)) goto failure;
+    map->entries = buffer.address;
+
+    status = gSLLoaderSystemTable->bootServices->getMemoryMap(&buffer.size, map->entries, &map->key, &entrySize, &version);
+    if (entrySize != sizeof(CXKMemoryMapEntry)) status = kSLStatusWrongSize;
+    if (version != 1) status = kSLStatusIncompatibleVersion;
+    if (!SLCheckStatus(status)) goto failure;
+
+    return map;
+
+failure:
+    if (map->entries)
+    {
+        buffer.size = (map->entryCount * sizeof(CXKMemoryMapEntry));
+        buffer.address = map->entries;
+
+        SLBootServicesFree(buffer);
+    }
+
+    buffer.size = sizeof(CXKMemoryMap);
+    buffer.address = map;
+
+    SLBootServicesFree(buffer);
+    return map;
+}
+
+CXKMemoryMap *SLBootServicesTerminate(void)
+{
+    CXKMemoryMap *finalMemoryMap = SLBootServicesGetMemoryMap();
+    if (!finalMemoryMap) return kOSNullPointer;
+
+    SLStatus status = gSLLoaderSystemTable->bootServices->terminate(gSLLoaderImageHandle, finalMemoryMap->key);
+
+    if (!SLCheckStatus(status)) {
+        OSBuffer buffer = OSBufferMake(finalMemoryMap, (finalMemoryMap->entryCount * sizeof(CXKMemoryMapEntry)));
+        SLBootServicesFree(buffer);
+
+        return kOSNullPointer;
+    } else {
+        gSLBootServicesEnabled = false;
+
+        return finalMemoryMap;
+    }
 }
 
 bool SLDelayProcessor(UIntN time, bool useBootServices)
 {
     if (useBootServices) {
-        //SLStatus success = SLBootServicesGetCurrent()->stall(time);
-        //return SLCheckStatus(status);
-        return false;
+        SLStatus status = SLBootServicesGetCurrent()->stall(time);
+        return SLCheckStatus(status);
     } else {
-        for (volatile UInt64 i = 0; i < (time * 10000); i++);
+        // Assume ~3 GHz to try to mimic BS stall() function
+        for (volatile UInt64 i = 0; i < (time * 3000000); i++);
         return true;
     }
 }
 
-#if 0
-
-static SLImageHandle gSLMainImageHandle = kOSNullPointer;
-static SLSystemTable *gSLSystemTable = kOSNullPointer;
-
-#if kCXDebug || kCXDevelopment
-    #define kSLInitialErrorCode       0x80
-    #define kSLInitialInfoCode        0x00
-
-    static CXKPOSTCode gSLErrorCode = kSLInitialErrorCode;
-    static CXKPOSTCode gSLInfoCode  = kSLInitialInfoCode;
-#endif /* debug || development */
-
-SLEFIABI void SLLibrarySetSystemTable(SLSystemTable *systemTable)
+char SLWaitForKeyPress(void)
 {
-    gSLSystemTable = systemTable;
+    SLStatus status = gSLLoaderSystemTable->stdin->reset(gSLLoaderSystemTable->stdin, false);
+    SLKeyPress key;
+
+    while (status == kSLStatusNotReady)
+        status = gSLLoaderSystemTable->stdin->readKey(gSLLoaderSystemTable->stdin, &key);
+
+    return key.keycode;
 }
 
-SLEFIABI void SLLibrarySetMainImageHandle(SLImageHandle imageHandle)
+bool SLBootServicesOutputString(SLString string)
 {
-    gSLMainImageHandle = imageHandle;
+    SLStatus status = gSLLoaderSystemTable->stdout->printUTF16(gSLLoaderSystemTable->stdout, string);
+    return SLCheckStatus(status);
 }
 
-SLEFIABI SLSystemTable *SLLibraryGetSystemTable(void)
+SLFile *SLGetRootDirectoryForImage(OSAddress imageHandle)
 {
-    return gSLSystemTable;
+    SLLoadedImage *loadedImage = SLLoadedImageGetFromHandle(imageHandle);
+    if (!loadedImage) return kOSNullPointer;
+
+    return SLLoadedImageGetRoot(loadedImage);
 }
 
-SLEFIABI SLImageHandle SLLibraryGetMainImageHandle(void)
+SLFile *SLOpenChild(SLFile *parent, SLString child)
 {
-    return gSLMainImageHandle;
+    SLFile *file;
+    SLStatus status = parent->open(parent, &file, child, kSLFileModeRead, 0);
+    bool failed = !SLCheckStatus(status);
+
+    return (failed ? kOSNullPointer : file);
 }
 
-SLEFIABI bool SLLibraryCheckStatus(SLStatus status)
+SLFile *SLOpenPath(SLString path)
 {
-    bool isError = SLStatusIsError(status);
-
-    #if kCXDebug || kCXDevelopment
-        CXKPOSTCode errorCode = gSLErrorCode++;
-        CXKPOSTCode infoCode  = gSLInfoCode++;
-        bool delay = false;
-
-        if (isError) CXKSetPOSTCode(errorCode);
-        else         CXKSetPOSTCode(infoCode);
-
-        // Wrapped Back around
-        if (gSLErrorCode <= kSLInitialInfoCode) {
-            gSLErrorCode = kSLInitialErrorCode;
-            delay = true;
-        } if (gSLInfoCode >= kSLInitialErrorCode) {
-            gSLInfoCode = kSLInitialInfoCode;
-            delay = true;
-        }
-
-        if (isError) SLPrintString(SLS("Status Error: 0x%X\r\n"), status);
-        if (delay) SLDelayProcessor(100);
-    #endif /* debug || development */
-
-    return isError;
-}
-
-SLEFIABI SLLoadedImage *SLGetLoadedImage(SLImageHandle imageHandle)
-{
-    SLProtocol loadedImageProtocol = kSLLoadedImageProtocol;
-    SLLoadedImage *image = kOSNullPointer;
-
-    SLStatus status = gSLSystemTable->bootServices->handleProtocol(imageHandle, &loadedImageProtocol, (void **)&image);
-    bool failed = SLLibraryCheckStatus(status);
-
-    return (failed ? kOSNullPointer : image);
-}
-
-SLEFIABI SLString SLGetLoadedImagePath(SLLoadedImage *image)
-{
-    return SLDevicePathToString(image->filePath, true, false);
-}
-
-SLEFIABI SLFileHandle SLGetRootDirectoryForImage(SLImageHandle imageHandle)
-{
-    SLLoadedImage *image = SLGetLoadedImage(imageHandle);
-    if (!image) return kOSNullPointer;
-
-    return SLLoadedImageGetRoot(image);
-}
-
-SLEFIABI SLFileHandle SLLoadedImageGetRoot(SLLoadedImage *image)
-{
-    SLProtocol volumeProtocol = kSLVolumeProtocol;
-    SLVolumeHandle *volume = kOSNullPointer;
-
-    SLStatus status = gSLSystemTable->bootServices->handleProtocol(image->deviceHandle, &volumeProtocol, (void *)&volume);
-    if (SLLibraryCheckStatus(status)) return kOSNullPointer;
-
-    SLFileHandle rootDirectory;
-    status = volume->openRoot(volume, &rootDirectory);
-    bool failed = SLLibraryCheckStatus(status);
-
-    return (failed ? kOSNullPointer : rootDirectory);
-}
-
-SLEFIABI SLFileHandle SLOpenChild(SLFileHandle root, SLString child)
-{
-    SLFileHandle handle;
-    SLStatus status = root->open(root, &handle, child, kSLFileModeRead, 0);
-    bool failed = SLLibraryCheckStatus(status);
-
-    return (failed ? kOSNullPointer : handle);
-}
-
-SLEFIABI SLFileHandle SLOpenPath(SLString path)
-{
-    SLFileHandle root = SLGetRootDirectoryForImage(gSLMainImageHandle);
+    SLFile *root = SLGetRootDirectoryForImage(gSLLoaderImageHandle);
     if (!root) return kOSNullPointer;
 
-    SLFileHandle child = SLOpenChild(root, path);
+    SLFile *child = SLOpenChild(root, path);
     if (!child) return kOSNullPointer;
 
     return child;
 }
 
-SLEFIABI bool SLReadFile(SLFileHandle file, OSOffset offset, OSBuffer readBuffer)
+bool SLCloseFile(SLFile *file)
 {
-    UInt64 currentOffset;
-    SLStatus status = file->getOffset(file, (UIntN *)&currentOffset);
-    if (SLLibraryCheckStatus(status)) return false;
+    SLStatus status = file->close(file);
+    return !SLCheckStatus(status);
+}
 
-    if (currentOffset != offset)
+bool SLFileRead(SLFile *file, OSOffset offset, OSBuffer readBuffer)
+{
+    UInt64 currentOffset, size = readBuffer.size;
+    SLStatus status = file->getOffset(file, &currentOffset);
+    if (!SLCheckStatus(status)) return false;
+
+    if (currentOffset != (UInt64)offset)
     {
         status = file->setOffset(file, offset);
-        if (SLLibraryCheckStatus(status)) return false;
+        if (!SLCheckStatus(status)) return false;
     }
 
-    status = file->read(file, (UIntN *)&readBuffer.size, readBuffer.address);
-    bool failed = SLLibraryCheckStatus(status);
+    status = file->read(file, &readBuffer.size, readBuffer.address);
+    bool failed = (!SLCheckStatus(status)) || (readBuffer.size != size);
 
     return !failed;
 }
 
-SLEFIABI OSBuffer SLReadFileFully(SLFileHandle file)
+OSBuffer SLFileReadFully(SLFile *file)
 {
-    SLGUID fileInfoID = kSLFileInfoID;
-    OSBuffer buffer = kOSBufferEmpty;
+    OSUIDIntelData fileInfoUID = kSLFileInfoID;
+    OSSize fileInfoSize = sizeof(SLFileInfo);
+    SLFileInfo fileInfo;
 
-    SLStatus status = file->getInfo(file, &fileInfoID, (UIntN *)&buffer.size, buffer.address);
-    if (SLLibraryCheckStatus(status)) return kOSBufferEmpty;
+    SLStatus status = file->getInfo(file, &fileInfoUID, &fileInfoSize, &fileInfo);
+    if (status == kSLStatusBufferTooSmall) status = kSLStatusSuccess;
+    if (!SLCheckStatus(status)) return kOSBufferEmpty;
 
-    OSSize bufferSize = buffer.size;
-    buffer = SLAllocateBuffer(buffer.size);
-    if (buffer.size != bufferSize) return kOSBufferEmpty;
-    if (OSBufferIsEmpty(buffer)) return kOSBufferEmpty;
+    OSBuffer buffer = SLBootServicesAllocate(fileInfo.size);
+    if (OSBufferIsEmpty(buffer)) return buffer;
+    status = file->read(file, &buffer.size, buffer.address);
 
-    status = file->read(file, (UIntN *)&buffer.size, buffer.address);
-    if (SLLibraryCheckStatus(status)) return kOSBufferEmpty;
+    if (!SLCheckStatus(status))
+    {
+        buffer.size = fileInfo.size;
+        SLBootServicesFree(buffer);
+
+        return kOSBufferEmpty;
+    }
 
     return buffer;
 }
 
-SLEFIABI bool SLReadPath(SLString path, OSOffset offset, OSBuffer readBuffer)
+bool SLReadPath(SLString path, OSOffset offset, OSBuffer readBuffer)
 {
-    SLFileHandle file = SLOpenPath(path);
+    SLFile *file = SLOpenPath(path);
     if (!file) return false;
 
-    SLStatus status = file->read(file, (UIntN *)&readBuffer.size, readBuffer.address);
-    bool failed = SLLibraryCheckStatus(status);
+    bool success = SLFileRead(file, offset, readBuffer);
+    SLStatus status = file->close(file);
 
-    return !failed;
+    if (!SLCheckStatus(status))
+        success = false;
+
+    return success;
 }
 
-SLEFIABI OSBuffer SLReadPathFully(SLString path)
+OSBuffer SLReadPathFully(SLString path)
 {
-    SLFileHandle file = SLOpenPath(path);
+    SLFile *file = SLOpenPath(path);
     if (!file) return kOSBufferEmpty;
 
-    return SLReadFileFully(file);
-}
+    OSBuffer result = SLFileReadFully(path);
+    SLStatus status = file->close(file);
 
-SLEFIABI bool SLAllocateBootPagesAtAddress(OSAddress address, OSCount pages)
-{
-    UInt64 addr = (UInt64)address;
-    SLStatus status = gSLSystemTable->bootServices->allocatePages(kSLAllocAtAddres, kSLMemoryTypeBootCode, pages, (unsigned long long int *)&addr);
-    if (SLLibraryCheckStatus(status)) return false;
-
-    return (*((OSAddress *)addr) == address);
-}
-
-SLEFIABI OSBuffer SLAllocateBuffer(OSSize size)
-{
-    OSBuffer buffer = kOSBufferEmpty;
-    buffer.size = size;
-
-    SLStatus status = gSLSystemTable->bootServices->allocate(kSLMemoryTypeLoaderData, buffer.size, &buffer.address);
-    bool failed = SLLibraryCheckStatus(status);
-
-    return (failed ? kOSBufferEmpty : buffer);
-}
-
-SLEFIABI bool SLFreeBuffer(OSBuffer buffer)
-{
-    SLStatus status = gSLSystemTable->bootServices->free(buffer.address);
-    bool failed = SLLibraryCheckStatus(status);
-
-    return !failed;
-}
-
-SLEFIABI CXKMemoryMap SLGetCurrentMemoryMap(void)
-{
-    CXKMemoryMap memoryMap = {0, 0, kOSNullPointer};
-
-    OSBuffer buffer = kOSBufferEmpty;
-    UInt32 descriptorVersion = 0;
-    UIntN descriptorSize = 0;
-    UIntN key = 0;
-
-    SLStatus status = gSLSystemTable->bootServices->getMemoryMap((UIntN *)&buffer.size, buffer.address, &key, &descriptorSize, &descriptorVersion);
-    if (descriptorSize != sizeof(CXKMemoryMapEntry)) status = kSLWrongSize;
-    if (descriptorVersion != 1) status = kSLIncompatibleVersion;
-    if (status == kSLBufferTooSmall) status = kSLSuccess;
-    if (SLLibraryCheckStatus(status)) return memoryMap;
-
-    buffer.size += descriptorSize;
-    memoryMap.entryCount = (buffer.size / descriptorSize);
-    buffer = SLAllocateBuffer(buffer.size);
-    if (OSBufferIsEmpty(buffer)) return memoryMap;
-    memoryMap.entries = buffer.address;
-
-    status = gSLSystemTable->bootServices->getMemoryMap((UIntN *)&buffer.size, (OSAddress)memoryMap.entries, (UIntN *)&memoryMap.key, &descriptorSize, &descriptorVersion);
-    if (descriptorSize != sizeof(CXKMemoryMapEntry)) status = kSLWrongSize;
-    if (descriptorVersion != 1) status = kSLIncompatibleVersion;
-    bool failed = SLLibraryCheckStatus(status);
-
-    if (failed)
+    if (!SLCheckStatus(status))
     {
-        status = SLFreeBuffer(buffer);
-        SLLibraryCheckStatus(status);
+        if (!OSBufferIsEmpty(result))
+            SLBootServicesFree(result);
 
-        memoryMap = ((CXKMemoryMap){0, 0, kOSNullPointer});
+        result = kOSBufferEmpty;
     }
 
-    return memoryMap;
+    return result;
 }
 
-SLEFIABI CXKMemoryMap SLDeactivateBootServices(void)
+SLLoadedImage *SLLoadedImageGetFromHandle(OSAddress imageHandle)
 {
-    CXKMemoryMap memoryMap = SLGetCurrentMemoryMap();
-    if (!memoryMap.key) return memoryMap;
+    SLProtocol loadedImageProtocol = kSLLoadedImageProtocol;
+    SLLoadedImage *image = kOSNullPointer;
 
-    SLStatus status = gSLSystemTable->bootServices->disable(gSLMainImageHandle, memoryMap.key);
-    if (SLLibraryCheckStatus(status)) memoryMap.key = 0;
+    SLStatus status = gSLLoaderSystemTable->bootServices->handleProtocol(imageHandle, &loadedImageProtocol, &image);
+    bool failed = !SLCheckStatus(status);
 
-    return memoryMap;
+    return (failed ? kOSNullPointer : image);
 }
 
-SLEFIABI void SLDelayProcessor(UInt32 time)
+SLFile *SLLoadedImageGetRoot(SLLoadedImage *image)
 {
-    for (volatile int i = 0; i < (10000 * time); i++);
+    SLProtocol volumeProtocol = kSLVolumeProtocol;
+    SLVolume *volume = kOSNullPointer;
+
+    SLStatus status = gSLLoaderSystemTable->bootServices->handleProtocol(image->deviceHandle, &volumeProtocol, &volume);
+    if (!SLCheckStatus(status)) return kOSNullPointer;
+
+    SLFile *root;
+    status = volume->openRoot(volume, &root);
+    bool failed = !SLCheckStatus(status);
+
+    return (failed ? kOSNullPointer : root);
 }
 
-SLEFIABI bool SLWaitForKeyPress(bool enableExitKey)
-{
-    SLStatus status = gSLSystemTable->stdin->reset(gSLSystemTable->stdin, false);
+#if kCXBuildDev
+    bool SLPromptUser(const char *s, SLSerialPort port)
+    {
+        SLPrintString("%s (y/n)? ", s);
+        UInt8 response = 0;
 
-    SLPressedKey key;
-    while ((status = gSLSystemTable->stdin->readKey(gSLSystemTable->stdin, &key) == kSLNotReady));
+        if (!gSLBootServicesEnabled) {
+            while (response != 'y' && response != 'n')
+                response = SLSerialReadCharacter(port, true);
+        } else {
+            gSLLoaderSystemTable->stdin->reset(gSLLoaderSystemTable->stdin, false);
+            SLStatus status;
+            SLKeyPress key;
 
-    if (enableExitKey && key.character == 'q')
-        gSLSystemTable->bootServices->exit(gSLMainImageHandle, 1, 0, kOSNullPointer);
+            while ((key.keycode != 'y' && response != 'y') && (key.keycode != 'n' && response != 'n'))
+            {
+                status = gSLLoaderSystemTable->stdin->readKey(gSLLoaderSystemTable->stdin, &key);
+                response = SLSerialReadCharacter(port, false);
 
-    return true;
-}
+                if (status != kSLStatusNotReady)
+                    response = key.keycode;
+            }
 
-#if kCXDebug || kCXDevelopment
+            if (key.keycode == 'y')
+                response = 'y';
 
-SLEFIABI CXKBasicSerialPort *SLInitSerial(UInt64 address)
-{
-    return CXKBasicSerialIntializeAtAddress((OSAddress)address);
-}
+            if (key.keycode == 'n')
+                response = 'n';
+        }
 
-SLEFIABI void SLPrintSerialString(CXKBasicSerialPort *port, UInt8 *string, OSLength length)
-{
-    for (UInt64 i = 0; i < length; i++)
-        CXKBasicSerialWriteCharacter(port, string[i], true);
-}
+        SLPrintString("%c\n", response);
+        return (response == 'y');
+    }
 
-#endif /* debug || development */
+    void SLShowDelay(const char *s, UInt64 seconds)
+    {
+        SLPrintString("%s in ", s);
 
-#endif
+        while (seconds)
+        {
+            SLPrintString("%d...", seconds);
+            SLDelayProcessor(1000000, gSLBootServicesEnabled);
+            SLDeleteCharacters(4);
+
+            seconds--;
+        }
+
+        SLDeleteCharacters(3);
+        SLPrintString("Now.\n");
+    }
+
+    void SLDumpProcessorState(bool standard, bool system, bool debug)
+    {
+        if (standard)
+        {
+            CXKProcessorBasicState state;
+
+            CXKProcessorGetBasicState(&state);
+            SLPrintString("Basic Register State:\n");
+            SLPrintBasicState(&state);
+            SLPrintString("\n");
+        }
+
+        if (system)
+        {
+            CXKProcessorSystemState state;
+
+            CXKProcessorGetSystemState(&state);
+            SLPrintString("System Register State:\n");
+            SLPrintSystemState(&state);
+
+            CXKProcessorMSR efer = CXKProcessorMSRRead(0xC0000080);
+            SLPrintString("efer: 0x%zX\n", efer);
+            SLPrintString("\n");
+        }
+
+        if (debug)
+        {
+            CXKProcessorDebugState state;
+
+            CXKProcessorGetDebugState(&state);
+            SLPrintString("Debug Register State:\n");
+            SLPrintDebugState(&state);
+            SLPrintString("\n");
+        }
+    }
+
+    #define SLPrintRegister(s, r)   SLPrintString(OSStringValue(r) ": 0x%zX\n", s->r)
+    #define SLPrintRegister16(s, r) SLPrintString(OSStringValue(r) ": 0x%hX\n", s->r)
+
+    #define SLPrint2Registers(s, r0, r1)            \
+        SLPrintRegister(s, r0);                     \
+        SLPrintRegister(s, r1);
+
+    #define SLPrint4Registers(s, r0, r1, r2, r3)    \
+        SLPrint2Registers(s, r0, r1);               \
+        SLPrint2Registers(s, r2, r3);
+
+    #define SLPrint2Registers16(s, r0, r1)          \
+        SLPrintRegister16(s, r0);                   \
+        SLPrintRegister16(s, r1);
+
+    #define SLPrint4Registers16(s, r0, r1, r2, r3)  \
+        SLPrint2Registers16(s, r0, r1);             \
+        SLPrint2Registers16(s, r2, r3);
+
+    void SLPrintBasicState(CXKProcessorBasicState *state)
+    {
+        SLPrint4Registers(state, rax, rbx, rcx, rdx);
+        SLPrint4Registers(state, r8,  r9,  r10, r11);
+        SLDelayProcessor(1000000, true);
+        SLPrint4Registers(state, r12, r13, r14, r15);
+        SLPrint4Registers(state, rsi, rdi, rbp, rsp);
+        SLDelayProcessor(1000000, true);
+        SLPrint2Registers(state, rip, rflags);
+        SLPrint4Registers16(state, cs, ds, ss, es);
+        SLPrint2Registers16(state, fs, gs);
+        SLDelayProcessor(1000000, true);
+    }
+
+    void SLPrintSystemState(CXKProcessorSystemState *state)
+    {
+        SLPrint4Registers(state, cr0, cr2, cr3, cr4);
+        SLPrintRegister(state, cr8);
+        SLDelayProcessor(1000000, true);
+
+        SLPrintString("gdtr: 0x%X (limit = 0x%hX)\n", state->gdtr.base, state->gdtr.limit);
+        SLPrintString("idtr: 0x%X (limit = 0x%hX)\n", state->idtr.base, state->idtr.limit);
+
+        SLPrint2Registers16(state, ldtr, tr);
+        SLDelayProcessor(1000000, true);
+    }
+
+    void SLPrintDebugState(CXKProcessorDebugState *state)
+    {
+        SLPrint4Registers(state, dr0, dr1, dr2, dr3);
+        SLPrint2Registers(state, dr6, dr7);
+    }
+#endif /* kCXBuildDev */

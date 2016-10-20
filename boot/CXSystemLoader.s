@@ -18,6 +18,8 @@
 //   %rbx
 //   %rcx
 //   %rdx
+//   %rdi
+//   %rsi
 //
 // If Debug:
 //
@@ -40,7 +42,16 @@ CXKDeclareFunction(_SLEntry):
         subq %rbx, %rax
         CXKLoadSymbol(gSLLoaderImageSize, %rbx)
         movq %rax, (%rbx)
+
+        CXKLoadSymbol(gSLEnableScreenPrint, %rbx)
+        movb $1, (%rbx)
     #endif /* kCXBuildDev */
+
+    CXKLoadSymbol(gSLBootServicesEnabled, %rbx)
+    movb $1, (%rbx)
+
+    movq %rcx, %rdi
+    movq %rdx, %rsi
 
     leaq CXSystemLoaderMain(%rip), %rax
     callq *%rax
@@ -55,8 +66,8 @@ CXKDeclareFunction(_SLEntry):
 //   %rcx: Exit Code
 //
 // This function will exit the loader
-// without returning. It can do whatever
-// it wants pretty much...
+// without returning. It can do pretty
+// much whatever it wants...
 CXKDeclareFunction(SLLeave):
     movq %rcx, %rdx
     CXKLoadSymbol(gSLLoaderImageHandle, %rbx)
@@ -80,9 +91,11 @@ CXKDeclareFunction(SLLeave):
 .comm gSLFirmwareReturnAddress, 8, 8
 .comm gSLLoaderSystemTable,     8, 8
 .comm gSLLoaderImageHandle,     8, 8
+.comm gSLBootServicesEnabled,   1, 1
 
 #if kCXBuildDev
     .comm gSLLoaderImageSize,   8, 8
+    .comm gSLEnableScreenPrint, 1, 1
 #endif /* kCXBuildDev */
 
 .section .reloc, "a", @progbits

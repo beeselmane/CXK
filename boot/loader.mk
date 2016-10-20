@@ -15,8 +15,8 @@ LOADER_OBJCOPY_FLAGS  = -j .peheader -j .text     -j .sdata   \
 						-j .rela     -j .reloc   \
 						-j .eh_frame             \
 						--output-target=efi-app-x86_64
-LOADER_CCFLAGS        = -mabi=ms -fno-stack-protector -fshort-wchar $(CCFLAGS) -DkCXBootloaderCode=1
-LOADER_LDFLAGS        = -znocombreloc -Wl,-E -Wl,-Bsymbolic -shared $(LDFLAGS)
+LOADER_CCFLAGS        = -fno-stack-protector -fshort-wchar $(CCFLAGS) -DkCXBootloaderCode=1
+LOADER_LDFLAGS        = -Wl,-E -Wl,-Bsymbolic -shared $(LDFLAGS)
 
 .PHONY: loader
 
