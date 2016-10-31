@@ -11,7 +11,7 @@ void SLLoaderSerial0OutputUTF8(UInt8 character)
 {
     if (character == '\b')
     {
-        SLSerialWriteString(gSLSerialPort0, "\b \b");
+        SLSerialWriteString(gSLSerialPort0, (const char *)"\b \b");
         return;
     }
 
@@ -20,8 +20,8 @@ void SLLoaderSerial0OutputUTF8(UInt8 character)
 
 void SLLoaderSetupSerial(void)
 {
-    OSAddress portAddress = (OSAddress)0x03F8;
-    SLSerialPort port = SLSerialPortInit((OSAddress)portAddress);
+    OSAddress portAddress = 0x03F8;
+    SLSerialPort port = SLSerialPortInit(portAddress);
 
     if (port == 0xFFFF)
     {
@@ -42,8 +42,6 @@ void SLLoaderSetupSerial(void)
         SLPrintError("Error Registering Serial Port 0 (at %p) to receive output!\n", portAddress);
         return;
     }
-
-    if (false) SLSetBootScreenOutput(false);
 }
 
 #endif /* kCXBuildDev */
@@ -55,22 +53,22 @@ SLStatus CXSystemLoaderMain(OSAddress imageHandle, SLSystemTable *systemTable)
         SLLoaderSetupSerial();
 
         if (gSLSerialPort0)
-        {
-            SLSetBootScreenOutput(false);
             SLPrintString(kSLLoaderWelcomeString);
-            SLSetBootScreenOutput(true);
-        }
+
+        #if kCXDebug
+            __SLLibraryInitialize();
+        #endif /* kCXDebug */
 
         bool runRequested = SLPromptUser("Run Tests", gSLSerialPort0);
 
         if (runRequested)
         {
-            SLShowDelay("Running", 3);
+            SLShowDelay("Running", 2);
             SLRunTests();
         }
 
         SLPrintString("Starting Loader. CPU States:\n");
-        SLDumpProcessorState(false, false, false);
+        SLDumpProcessorState(true, true, true);
 
         SLWaitForKeyPress();
     #endif /* kCXBuildDev */

@@ -3,8 +3,6 @@
 #include <SystemLoader/SLLibrary.h>
 
 typedef UInt32 SLUnicodePoint;
-typedef UInt16 SLUTF16Char;
-typedef UInt8 SLUTF8Char;
 
 static const SLUnicodePoint kSLSurrogateHighBegin  = 0xD800;
 static const SLUnicodePoint kSLSurrogateHighFinish = 0xDBFF;
@@ -177,11 +175,6 @@ OSPrivate SLUnicodePoint SLUTF16ToCodePoint(SLUTF16Char *input, OSCount inCount,
 }
 
 #if kCXBuildDev
-    void SLSetBootScreenOutput(bool enabled)
-    {
-        gSLEnableScreenPrint = enabled;
-    }
-
     bool SLRegisterOutputFunction(SLOutputUTF8 function)
     {
         for (UInt8 i = 0; i < 8; i++)
@@ -241,87 +234,40 @@ static OSLength SLSimpleStringLengthUTF16(SLUTF16Char *string)
 
 extern void SLLoaderSerial0OutputUTF8(UInt8 character);
 
-OSInline void SLPrintSingle(SLUTF8Char utf8[7], SLUTF16Char utf16[3], bool enableUTF16)
+OSInline void SLPrintSingle(UInt8 character)
+{
+    for (UInt8 i = 0; gSLOutputFunctions[i] && (i < 8); i++)
+        gSLOutputFunctions[i](character);
+}
+
+OSInline void SLPrintUTF8Single(SLUTF8Char character[7])
 {
     for (UInt8 i = 0; i < 8; i++)
     {
         if (gSLOutputFunctions[i]) {
             UInt8 n = 0;
 
-            while (utf8[n])
+            while (character[n])
             {
-                #if kCXBuildDev
-                    SLLoaderSerial0OutputUTF8(utf8[n]);
-                #else
-                    gSLOutputFunctions[i](utf8[n]);
-                #endif
-
+                gSLOutputFunctions[i](character[n]);
                 n++;
             }
         } else {
             break;
         }
     }
-
-    if (enableUTF16 && utf16[0])
-    {
-        if (utf16[0] == '\n' && !utf16[1])
-        {
-            utf16[0] = '\r';
-            utf16[1] = '\n';
-            utf16[2] = 0;
-        }
-
-        SLSimpleTextOutput *stdout = gSLLoaderSystemTable->stdout;
-        stdout->printUTF16(stdout, utf16);
-    }
 }
 
-#define SLLoadSingle(a)         \
-    do {                        \
-        utf8[0] = a;            \
-        utf8[1] = 0;            \
-                                \
-        if (enableUTF16)        \
-        {                       \
-            utf16[0] = a;       \
-            utf16[1] = 0;       \
-        }                       \
-    } while (0)
-
-#define SLLoadDouble(a, b)      \
-    do {                        \
-        utf8[0] = a;            \
-        utf8[1] = b;            \
-        utf8[2] = 0;            \
-                                \
-        if (enableUTF16)        \
-        {                       \
-            utf16[0] = a;       \
-            utf16[1] = b;       \
-            utf16[2] = 0;       \
-        }                       \
-    } while (0)
-
-#define kSLPrintSingleArgs      utf8, utf16, enableUTF16
-
-OSInline void SLPrintNumber(UInt64 number, UInt8 base, UInt8 hexBegin, UInt8 padding, bool enableUTF16)
+OSInline void SLPrintNumber(UInt64 number, UInt8 base, UInt8 hexBegin, UInt8 padding)
 {
     SLUTF8Char  buffer[32];
-    SLUTF16Char utf16[3];
-    SLUTF8Char  utf8[7];
     SInt8 i = 0;
 
     if (!number)
     {
         if (padding)
-        {
             for ( ; i < padding; i++)
-            {
-                SLLoadSingle('0');
-                SLPrintSingle(kSLPrintSingleArgs);
-            }
-        }
+                SLPrintSingle('0');
 
         return;
     }
@@ -344,24 +290,11 @@ OSInline void SLPrintNumber(UInt64 number, UInt8 base, UInt8 hexBegin, UInt8 pad
         UInt8 zeroCount = padding - i;
 
         for (UInt8 j = 0; j < zeroCount; j++)
-        {
-            SLLoadSingle('0');
-            SLPrintSingle(kSLPrintSingleArgs);
-        }
+            SLPrintSingle('0');
     }
 
     for (i--; i >= 0; i--)
-    {
-        if (i) {
-            SLLoadDouble(buffer[i], buffer[i - 1]);
-            SLPrintString(kSLPrintSingleArgs);
-
-            i--;
-        } else {
-            SLLoadSingle(buffer[i]);
-            SLPrintSingle(kSLPrintSingleArgs);
-        }
-    }
+        SLPrintSingle(buffer[i]);
 }
 
 #if !kCXBuildDev
@@ -370,26 +303,18 @@ OSInline void SLPrintNumber(UInt64 number, UInt8 base, UInt8 hexBegin, UInt8 pad
 
 OSPrivate void SLPrintString(const char *s, ...)
 {
-    #if kCXBuildDev
-        bool enableUTF16 = (gSLBootServicesEnabled && gSLEnableScreenPrint);
-    #else /* !kCXBuildDev */
-        bool enableUTF16 = (gSLBootServicesEnabled);
-    #endif /* kCXBuildDev */
-
     bool justEnteredEscapeCode = false;
     bool inEscapeCode = false;
     bool printNumber = false;
     bool printSign = false;
     bool inPadding = false;
+    bool hexDump = false;
 
     UInt8 hexBase = 'A';
     UInt8 lastFlag = 0;
     UInt8 argSize = 4;
     UInt8 padding = 1;
     UInt8 base = 10;
-
-    SLUTF16Char utf16[3];
-    SLUTF8Char utf8[7];
 
     OSVAList args;
     OSVAStart(args, s);
@@ -400,8 +325,7 @@ OSPrivate void SLPrintString(const char *s, ...)
 
         if (!inEscapeCode && c != '%')
         {
-            SLLoadSingle(c);
-            SLPrintSingle(kSLPrintSingleArgs);
+            SLPrintSingle(c);
 
             continue;
         }
@@ -420,9 +344,8 @@ OSPrivate void SLPrintString(const char *s, ...)
 
             if (c == '%')
             {
-                SLLoadSingle(c);
-                SLPrintSingle(kSLPrintSingleArgs);
                 inEscapeCode = false;
+                SLPrintSingle(c);
 
                 continue;
             }
@@ -497,55 +420,30 @@ OSPrivate void SLPrintString(const char *s, ...)
                 base = 16;
             } break;
             case 'p': {
-                SLLoadDouble('0', 'x');
-                SLPrintSingle(kSLPrintSingleArgs);
+                SLPrintSingle('0');
+                SLPrintSingle('x');
 
                 inEscapeCode = false;
                 printNumber = true;
                 hexBase = 'A';
                 argSize = 8;
                 base = 16;
-            }
+            } break;
             case 'c': {
-                inEscapeCode = false;
                 UInt8 character = OSVAGetNext(args, UInt32);
+                inEscapeCode = false;
 
-                SLLoadSingle(character);
-                SLPrintSingle(kSLPrintSingleArgs);
+                SLPrintSingle(character);
             } break;
             case 's': {
                 inEscapeCode = false;
                 SLUTF8Char *utf8string = OSVAGetNext(args, SLUTF8Char *);
                 OSCount charsLeft = SLSimpleStringLengthUTF8(utf8string);
-                OSCount used, used16;
-                UInt8 i;
 
                 while (charsLeft)
                 {
-                    if (enableUTF16) {
-                        SLUnicodePoint point = SLUTF8ToCodePoint(utf8string, charsLeft, &used);
-                        if (point == kSLErrorCodePoint) break;
-                        used++;
-
-                        used16 = SLUTF16FromCodePoint(point, utf16, 1);
-                        utf16[used16 + 1] = 0;
-
-                        //CXKMemoryCopy(utf8string, utf8, used);
-                        for (i = 0; i < used; i++)
-                            utf8[i] = utf8string[i];
-
-                        utf8string += used;
-                        charsLeft -= used;
-                        utf8[used] = 0;
-                    } else {
-                        for (i = 0; i <= charsLeft && i < 7; i++)
-                            utf8[i] = (*utf8string++);
-
-                        charsLeft -= (i - 1);
-                        utf8[i] = 0;
-                    }
-
-                    SLPrintSingle(kSLPrintSingleArgs);
+                    SLPrintSingle(*utf8string++);
+                    charsLeft--;
                 }
             } break;
             case 'S': {
@@ -553,6 +451,7 @@ OSPrivate void SLPrintString(const char *s, ...)
                 SLUTF16Char *utf16string = OSVAGetNext(args, SLUTF16Char *);
                 OSCount charsLeft = SLSimpleStringLengthUTF16(utf16string);
                 OSCount used, used8;
+                SLUTF8Char utf8[7];
 
                 while (charsLeft)
                 {
@@ -563,15 +462,32 @@ OSPrivate void SLPrintString(const char *s, ...)
                     used8 = SLUTF8FromCodePoint(point, utf8, 6);
                     utf8[used8 + 1] = 0;
 
-                    for (UInt8 i = 0; i < used; i++)
-                        utf16[i] = utf16string[i];
-
                     utf16string += used;
                     charsLeft -= used;
-                    utf16[used] = 0;
 
-                    SLPrintSingle(kSLPrintSingleArgs);
+                    SLPrintUTF8Single(utf8);
                 }
+            } break;
+            // Extension to print a hex string
+            // from a given address
+            //
+            // The length of the string is
+            // specified by the padding,
+            // and the number of characters
+            // in between spaces is specified
+            // by the length modifiers used
+            //
+            // Because of the implementation
+            // of the padding, the maximum
+            // amount of data which can be
+            // dumped is 255 pieces of the
+            // given data size. This gives
+            // an overall maximum of 2040
+            // bytes with a padding of 255
+            // and a 64-bit separator size
+            case 'H': {
+                inEscapeCode = false;
+                hexDump = true;
             } break;
         }
 
@@ -583,6 +499,37 @@ OSPrivate void SLPrintString(const char *s, ...)
             } else {
                 inPadding = false;
             }
+        }
+
+        if (hexDump)
+        {
+            OSAddress argument = OSVAGetNext(args, OSAddress);
+            UInt64 number = 0;
+
+            while (padding)
+            {
+                #define entry(l) {                  \
+                    UInt ## l *arg = argument;      \
+                    number = (*arg);                \
+                    argument += sizeof(UInt ## l);  \
+                } break
+                switch (argSize)
+                {
+                    case 1: entry(8);
+                    case 2: entry(16);
+                    case 4: entry(32);
+                    case 8: entry(64);
+                }
+                #undef entry
+
+                SLPrintNumber(number, 16, 'A', argSize * 2);
+                if (padding != 1) SLPrintSingle(' ');
+                padding--;
+            }
+
+            hexDump = false;
+            argSize = 4;
+            padding = 1;
         }
 
         if (printNumber)
@@ -600,6 +547,7 @@ OSPrivate void SLPrintString(const char *s, ...)
                     case 8:
                         number = OSVAGetNext(args, UInt64);
                     break;
+                    default: number = 0;
                 }
             } else {
                 SInt64 signedValue;
@@ -614,21 +562,21 @@ OSPrivate void SLPrintString(const char *s, ...)
                     case 8:
                         signedValue = OSVAGetNext(args, SInt64);
                     break;
+                    default: signedValue = 0;
                 }
 
                 if (signedValue < 0)
                 {
                     signedValue *= -1;
 
-                    SLLoadSingle('-');
-                    SLPrintSingle(kSLPrintSingleArgs);
+                    SLPrintSingle('-');
                 }
 
                 printSign = false;
                 number = signedValue;
             }
 
-            SLPrintNumber(number, base, hexBase, padding, enableUTF16);
+            SLPrintNumber(number, base, hexBase, padding);
             printNumber = false;
             padding = 1;
         }
@@ -637,4 +585,6 @@ OSPrivate void SLPrintString(const char *s, ...)
     OSVAFinish(args);
 }
 
-void SLPrintError(const char *s, ...) OSAlias(SLPrintString);
+#if !kCXTargetOSApple
+    void SLPrintError(const char *s, ...) OSAlias(SLPrintString);
+#endif /* !kCXTargetOSApple */

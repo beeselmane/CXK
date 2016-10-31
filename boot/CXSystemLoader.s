@@ -24,8 +24,7 @@
 // If Debug:
 //
 CXKDeclareFunction(_SLEntry):
-    popq %rax
-    pushq %rax
+    movq (%rsp), %rax
 
     CXKLoadSymbol(gSLFirmwareReturnAddress, %rbx)
     movq %rax, (%rbx)
@@ -36,7 +35,7 @@ CXKDeclareFunction(_SLEntry):
     CXKLoadSymbol(gSLLoaderSystemTable, %rbx)
     movq %rdx, (%rbx)
 
-    #if kCXBuildDev
+    #if kCXBuildDev && !kCXTargetOSApple
         leaq gSLLoaderBase(%rip), %rbx
         leaq gSLLoaderEnd(%rip), %rax
         subq %rbx, %rax
@@ -50,14 +49,17 @@ CXKDeclareFunction(_SLEntry):
     CXKLoadSymbol(gSLBootServicesEnabled, %rbx)
     movb $1, (%rbx)
 
-    movq %rcx, %rdi
-    movq %rdx, %rsi
+    leaq CXKFunction(SLMemoryAllocatorInit)(%rip), %rax
+    callq *%rax
 
-    leaq CXSystemLoaderMain(%rip), %rax
+    CXKLoadSymbol(gSLLoaderImageHandle, %rcx)
+    CXKLoadSymbol(gSLLoaderSystemTable, %rdx)
+
+    leaq CXKFunction(CXSystemLoaderMain)(%rip), %rax
     callq *%rax
 
     movq %rax, %rcx
-    leaq SLLeave(%rip), %rax
+    leaq CXKFunction(SLLeave)(%rip), %rax
     callq *%rax
 
 .align kCXKNaturalAlignment
@@ -88,21 +90,23 @@ CXKDeclareFunction(SLLeave):
     pushq (%rax)      // Inject firmware return address
     ret               // Return to given address
 
-.comm gSLFirmwareReturnAddress, 8, 8
-.comm gSLLoaderSystemTable,     8, 8
-.comm gSLLoaderImageHandle,     8, 8
-.comm gSLBootServicesEnabled,   1, 1
+.comm CXKSymbol(gSLFirmwareReturnAddress), 8, 8
+.comm CXKSymbol(gSLLoaderSystemTable),     8, 8
+.comm CXKSymbol(gSLLoaderImageHandle),     8, 8
+.comm CXKSymbol(gSLBootServicesEnabled),   1, 1
 
 #if kCXBuildDev
-    .comm gSLLoaderImageSize,   8, 8
-    .comm gSLEnableScreenPrint, 1, 1
+    .comm CXKSymbol(gSLLoaderImageSize),   8, 8
+    .comm CXKSymbol(gSLEnableScreenPrint), 1, 1
 #endif /* kCXBuildDev */
 
+#if kCXTargetOSLinux
 .section .reloc, "a", @progbits
 
 // Pretend like we're a relocatable executable...
 .int 0
 .int 10
 .word 0
+#endif /* Target OS */
 
 #endif /* Arch */

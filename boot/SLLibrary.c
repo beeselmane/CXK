@@ -40,6 +40,15 @@ bool SLBootServicesAllocatePages(OSAddress base, OSCount pages)
     return base;
 }
 
+OSBuffer SLBootServicesAllocateAnyPages(OSCount pages)
+{
+    OSAddress result;
+    SLStatus status = gSLLoaderSystemTable->bootServices->allocatePages(kSLAllocTypeAnyPages, kSLMemoryTypeLoaderData, pages, &result);
+    if (!SLCheckStatus(status)) return kOSBufferEmpty;
+
+    return OSBufferMake(result, (pages * kSLBootPageSize));
+}
+
 OSBuffer SLBootServicesAllocate(OSSize size)
 {
     OSAddress result;
@@ -56,8 +65,7 @@ bool SLBootServicesFree(OSBuffer buffer)
 
 CXKMemoryMap *SLBootServicesGetMemoryMap(void)
 {
-    OSBuffer buffer = SLBootServicesAllocate(sizeof(CXKMemoryMap));
-    if (OSBufferIsEmpty(buffer)) return kOSNullPointer;
+    OSBuffer buffer = SLAllocate(sizeof(CXKMemoryMap));
     CXKMemoryMap *map = buffer.address;
     UIntN entrySize;
     UInt32 version;
@@ -68,10 +76,8 @@ CXKMemoryMap *SLBootServicesGetMemoryMap(void)
     if (version != 1) status = kSLStatusIncompatibleVersion;
     if (!SLCheckStatus(status)) goto failure;
 
-    map->entryCount = (buffer.size / entrySize) + 1;
-    buffer.size += entrySize;
-    buffer = SLBootServicesAllocate(buffer.size);
-    if (OSBufferIsEmpty(buffer)) goto failure;
+    map->entryCount = (buffer.size / entrySize);
+    buffer = SLAllocate(buffer.size);
     map->entries = buffer.address;
 
     status = gSLLoaderSystemTable->bootServices->getMemoryMap(&buffer.size, map->entries, &map->key, &entrySize, &version);
@@ -82,19 +88,10 @@ CXKMemoryMap *SLBootServicesGetMemoryMap(void)
     return map;
 
 failure:
-    if (map->entries)
-    {
-        buffer.size = (map->entryCount * sizeof(CXKMemoryMapEntry));
-        buffer.address = map->entries;
+    if (map->entries) SLFree(map->entries);
+    SLFree(map);
 
-        SLBootServicesFree(buffer);
-    }
-
-    buffer.size = sizeof(CXKMemoryMap);
-    buffer.address = map;
-
-    SLBootServicesFree(buffer);
-    return map;
+    return kOSNullPointer;
 }
 
 CXKMemoryMap *SLBootServicesTerminate(void)
@@ -105,8 +102,7 @@ CXKMemoryMap *SLBootServicesTerminate(void)
     SLStatus status = gSLLoaderSystemTable->bootServices->terminate(gSLLoaderImageHandle, finalMemoryMap->key);
 
     if (!SLCheckStatus(status)) {
-        OSBuffer buffer = OSBufferMake(finalMemoryMap, (finalMemoryMap->entryCount * sizeof(CXKMemoryMapEntry)));
-        SLBootServicesFree(buffer);
+        SLFree(finalMemoryMap);
 
         return kOSNullPointer;
     } else {
@@ -122,8 +118,8 @@ bool SLDelayProcessor(UIntN time, bool useBootServices)
         SLStatus status = SLBootServicesGetCurrent()->stall(time);
         return SLCheckStatus(status);
     } else {
-        // Assume ~3 GHz to try to mimic BS stall() function
-        for (volatile UInt64 i = 0; i < (time * 3000000); i++);
+        // Try to mimic BS stall() function
+        for (volatile UInt64 i = 0; i < (time * 100); i++);
         return true;
     }
 }
@@ -131,6 +127,8 @@ bool SLDelayProcessor(UIntN time, bool useBootServices)
 char SLWaitForKeyPress(void)
 {
     SLStatus status = gSLLoaderSystemTable->stdin->reset(gSLLoaderSystemTable->stdin, false);
+    if (!SLCheckStatus(status)) return 0;
+    status = kSLStatusNotReady;
     SLKeyPress key;
 
     while (status == kSLStatusNotReady)
@@ -207,7 +205,7 @@ OSBuffer SLFileReadFully(SLFile *file)
     if (status == kSLStatusBufferTooSmall) status = kSLStatusSuccess;
     if (!SLCheckStatus(status)) return kOSBufferEmpty;
 
-    OSBuffer buffer = SLBootServicesAllocate(fileInfo.size);
+    OSBuffer buffer = SLAllocate(fileInfo.size);
     if (OSBufferIsEmpty(buffer)) return buffer;
     status = file->read(file, &buffer.size, buffer.address);
 
@@ -281,6 +279,142 @@ SLFile *SLLoadedImageGetRoot(SLLoadedImage *image)
     return (failed ? kOSNullPointer : root);
 }
 
+SLGraphicsOutput **SLGraphicsOutputGetAll(void)
+{
+    SLBootServices *bootServices = gSLLoaderSystemTable->bootServices;
+    SLProtocol protocol = kSLGraphicsOutputProtocol;
+    OSAddress *devices;
+    UIntN count;
+
+    SLStatus status = bootServices->localeHandles(kSLSearchTypeByProtocol, &protocol, kOSNullPointer, &count, &devices);
+    if (!SLCheckStatus(status)) return kOSNullPointer;
+
+    OSBuffer resultBuffer = SLAllocate((count + 1) * sizeof(SLGraphicsOutput *));
+    SLGraphicsOutput **results = resultBuffer.address;
+    results[count] = kOSNullPointer;
+    OSCount i = 0;
+
+    for ( ; i < count; i++)
+    {
+        SLGraphicsOutput *output;
+        status = bootServices->handleProtocol(devices[i], &protocol, &output);
+        results[i] = output;
+
+        if (!SLCheckStatus(status)) goto failure;
+    }
+
+    status = bootServices->free(devices);
+    if (!SLCheckStatus(status)) goto failure;
+    return results;
+
+failure:
+    bootServices->free(devices);
+    SLFree(results);
+
+    return kOSNullPointer;
+}
+
+SLGraphicsModeInfo *SLGraphicsOutputGetMode(SLGraphicsOutput *graphics, UInt32 modeNumber)
+{
+    OSSize size = sizeof(SLGraphicsModeInfo *);
+    SLGraphicsModeInfo *info;
+
+    SLStatus status = graphics->getMode(graphics, modeNumber, &size, &info);
+    return (SLCheckStatus(status) ? info : kOSNullPointer);
+}
+
+SLGraphicsMode *SLGraphicsOutputGetCurrentMode(SLGraphicsOutput *graphics)
+{
+    return graphics->mode;
+}
+
+SLGraphicsContext *SLGraphicsOutputGetContext(SLGraphicsOutput *graphics)
+{
+    return SLGraphicsOutputGetContextWithMaxSize(graphics, 0xFFFFFFFF, 0xFFFFFFFF);
+}
+
+SLGraphicsContext *SLGraphicsOutputGetContextWithMaxSize(SLGraphicsOutput *graphics, UInt32 maxHeight, UInt32 maxWidth)
+{
+    UInt32 modes = graphics->mode->numberOfModes;
+    SLGraphicsModeInfo *maxMode = kOSNullPointer;
+    UInt32 maxModeNumber = 0;
+    UInt32 maxModeHeight = 0;
+    UInt32 maxModeWidth = 0;
+
+    for (UInt32 i = 0; i < modes; i++)
+    {
+        SLGraphicsModeInfo *mode = SLGraphicsOutputGetMode(graphics, i);
+
+        if (mode->format != kSLGraphicsPixelFormatRGBX8 && mode->format != kSLGraphicsPixelFormatBGRX8)
+            continue;
+
+        if (mode->width > maxWidth)
+            continue;
+
+        if (mode->width > maxModeWidth)
+            maxModeWidth = mode->width;
+    }
+
+    for (UInt32 i = 0; i < modes; i++)
+    {
+        SLGraphicsModeInfo *mode = SLGraphicsOutputGetMode(graphics, i);
+        
+        if (mode->format != kSLGraphicsPixelFormatRGBX8 && mode->format != kSLGraphicsPixelFormatBGRX8)
+            continue;
+        
+        if (mode->width == maxModeWidth)
+        {
+            if (mode->height > maxHeight)
+                continue;
+
+            if (mode->height > maxModeHeight)
+            {
+                maxModeHeight = mode->height;
+                maxModeNumber = i;
+                maxMode = mode;
+            }
+        }
+    }
+
+    if (!maxMode) return kOSNullPointer;
+    SLStatus status = graphics->setMode(graphics, maxModeNumber);
+    if (!SLCheckStatus(status)) return kOSNullPointer;
+
+    OSBuffer buffer = SLAllocate(sizeof(SLGraphicsContext));
+    SLGraphicsContext *context = buffer.address;
+    context->height = maxMode->height;
+    context->width = maxMode->width;
+    context->framebuffer = graphics->mode->framebuffer;
+    context->framebufferSize = graphics->mode->framebufferSize;
+    context->pixelCount = graphics->mode->framebufferSize / sizeof(UInt32);
+    context->isBGRX = (maxMode->format == kSLGraphicsPixelFormatBGRX8);
+
+    return context;
+}
+
+extern UInt8 gSLBitmapFont8x16Data[256 * 16];
+
+void SLGraphicsContextWriteCharacter(SLGraphicsContext *context, UInt8 character, SLGraphicsPoint location, SLBitmapFont *font, UInt32 color, UInt32 bgColor)
+{
+    // This only supports the 8x16 bitmap font for now...
+    if (font->height != 16 || font->width != 8) return;
+    UInt8 *characterData = font->fontData + (character * font->height);
+
+    for (OSCount i = 0; i < 16; i++)
+    {
+        UInt32 *rowPointer = context->framebuffer + (((location.y + i) * context->width) + location.x);
+        UInt8 data = characterData[i];
+
+        for (SInt8 j = (font->width - 1); j >= 0; j--)
+        {
+            UInt8 state = (data >> j) & 1;
+            UInt32 fillValue = (state ? color : bgColor);
+
+            rowPointer[j] = fillValue;
+        }
+    }
+}
+
 #if kCXBuildDev
     bool SLPromptUser(const char *s, SLSerialPort port)
     {
@@ -292,8 +426,8 @@ SLFile *SLLoadedImageGetRoot(SLLoadedImage *image)
                 response = SLSerialReadCharacter(port, true);
         } else {
             gSLLoaderSystemTable->stdin->reset(gSLLoaderSystemTable->stdin, false);
+            SLKeyPress key; key.keycode = 0;
             SLStatus status;
-            SLKeyPress key;
 
             while ((key.keycode != 'y' && response != 'y') && (key.keycode != 'n' && response != 'n'))
             {
@@ -391,27 +525,22 @@ SLFile *SLLoadedImageGetRoot(SLLoadedImage *image)
     {
         SLPrint4Registers(state, rax, rbx, rcx, rdx);
         SLPrint4Registers(state, r8,  r9,  r10, r11);
-        SLDelayProcessor(1000000, true);
         SLPrint4Registers(state, r12, r13, r14, r15);
         SLPrint4Registers(state, rsi, rdi, rbp, rsp);
-        SLDelayProcessor(1000000, true);
         SLPrint2Registers(state, rip, rflags);
         SLPrint4Registers16(state, cs, ds, ss, es);
         SLPrint2Registers16(state, fs, gs);
-        SLDelayProcessor(1000000, true);
     }
 
     void SLPrintSystemState(CXKProcessorSystemState *state)
     {
         SLPrint4Registers(state, cr0, cr2, cr3, cr4);
         SLPrintRegister(state, cr8);
-        SLDelayProcessor(1000000, true);
 
         SLPrintString("gdtr: 0x%X (limit = 0x%hX)\n", state->gdtr.base, state->gdtr.limit);
         SLPrintString("idtr: 0x%X (limit = 0x%hX)\n", state->idtr.base, state->idtr.limit);
 
         SLPrint2Registers16(state, ldtr, tr);
-        SLDelayProcessor(1000000, true);
     }
 
     void SLPrintDebugState(CXKProcessorDebugState *state)
@@ -419,4 +548,24 @@ SLFile *SLLoadedImageGetRoot(SLLoadedImage *image)
         SLPrint4Registers(state, dr0, dr1, dr2, dr3);
         SLPrint2Registers(state, dr6, dr7);
     }
+
+    void SLUnrecoverableError(void)
+    {
+        OSFault();
+    }
+#else /* !kCXBuildDev */
+    void SLUnrecoverableError(void)
+    {
+        OSFault();
+    }
 #endif /* kCXBuildDev */
+
+#if kCXDebug
+
+    void __SLLibraryInitialize(void)
+    {
+        __SLBitmapFontInitialize();
+        __SLVideoConsoleInitAll();
+    }
+
+#endif /* kCXDebug */

@@ -71,7 +71,7 @@
 CXKDeclareFunction(SLSerialPortInit):
     SLSerialPortTest 1f
     pushw %cx
-    callq SLSerialPortReset
+    callq CXKFunction(SLSerialPortReset)
     popw %cx
     movw %cx, %dx
     addw $4, %dx
@@ -201,7 +201,7 @@ CXKDeclareFunction(SLSerialPortSetBaudRate):
     test %edx, %edx
     jnz 1f
     movl %eax, %edx
-    callq SLSerialPortSetBaudDivisor
+    callq CXKFunction(SLSerialPortSetBaudDivisor)
 
     1:
         ret
@@ -226,7 +226,7 @@ CXKDeclareFunction(SLSerialWriteCharacter):
     movb $0x0D, %dl
     shlw $8, %r8w
     orb $1, %r8b
-    callq SLSerialWriteCharacter
+    callq CXKFunction(SLSerialWriteCharacter)
     movb $0x0A, %r9b
     shrw $8, %r8w
 
@@ -311,7 +311,7 @@ CXKDeclareFunction(SLSerialWriteString):
         testb %dl, %dl
         jz 2f
         incq %r10
-        callq SLSerialWriteCharacter
+        callq CXKFunction(SLSerialWriteCharacter)
         jmp 1b
 
     2:
@@ -346,11 +346,11 @@ CXKDeclareFunction(SLSerialReadString):
 
     1:
         movb $1, %dl
-        callq SLSerialReadCharacter
+        callq CXKFunction(SLSerialReadCharacter)
         movb %al, %dil
         movb %al, %dl
         movb $1, %r8b
-        callq SLSerialWriteCharacter
+        callq CXKFunction(SLSerialWriteCharacter)
         cmpb %r10b, %dil
         je 2f
         movb %dil, (%rbx)
