@@ -52,6 +52,11 @@ CXKDeclareFunction(_SLEntry):
     leaq CXKFunction(SLMemoryAllocatorInit)(%rip), %rax
     callq *%rax
 
+    #if kCXBuildDev
+        leaq CXKFunction(__SLLibraryInitialize)(%rip), %rax
+        callq *%rax
+    #endif /* kCXBuildDev */
+
     CXKLoadSymbol(gSLLoaderImageHandle, %rcx)
     CXKLoadSymbol(gSLLoaderSystemTable, %rdx)
 

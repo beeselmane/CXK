@@ -7,6 +7,9 @@ UInt8 gSLBitmapFont8x16Data[256 * 16] = {
 /* A */  0x00, 0x00, 0x3E, 0x63, 0x63, 0x63, 0x7F, 0x63, 0x63, 0x63, 0x63, 0x63, 0x00, 0x00, 0x00, 0x00
 };
 
+// Yes, I know this is copywritten and wrong
+// but I'll delete it once I design a better font...
+// (which should be soon, btw)
 unsigned char __apple_xnu_font[256*16] = {
     /*   0 */ 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     /*   1 */ 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -271,9 +274,40 @@ SLBitmapFont gSLBitmapFont8x16 = {
     .width  = 8,
 };
 
+static const UInt32 kSLDefaultForegroundColor = 0x00FFFFFF;
+static const UInt32 kSLDefaultBackgroundColor = 0x00000000;
+
+void SLUnpackFont(SLBitmapFont *font)
+{
+    font->fontData = SLAllocate(256 * font->height * font->width * sizeof(UInt32)).address;
+    UInt8 character = 0;
+
+    do {
+        UInt32 *rowPointer = font->fontData + ((font->height * font->width) * character);
+        UInt8 *characterData = font->packedData + (character * font->height);
+
+        for (OSCount y = 0; y < font->height; y++)
+        {
+            UInt8 data = characterData[y];
+
+            for (SInt8 x = (font->width - 1); x >= 0; x--)
+            {
+                UInt32 fillValue = ((data >> x) & 1) ? kSLDefaultForegroundColor : kSLDefaultBackgroundColor;
+
+                rowPointer[x] = fillValue;
+            }
+
+            rowPointer += font->width;
+        }
+
+        character++;
+    } while (character);
+}
+
 void __SLBitmapFontInitialize(void)
 {
-    //gSLBitmapFont8x16.fontData = gSLBitmapFont8x16Data;
-    gSLBitmapFont8x16.fontData = __apple_xnu_font;
+    gSLBitmapFont8x16.packedData = __apple_xnu_font;
+
+    SLUnpackFont(&gSLBitmapFont8x16);
 }
 #endif /* kCXDebug */

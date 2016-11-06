@@ -6,16 +6,12 @@ typedef struct {
     SLConsole rootConsole;
     SLGraphicsContext *context;
     SLBitmapFont *selectedFont;
-    SLConsoleLocation cursor;
+    SLGraphicsPoint cursor;
     UInt32 baseOffsetX;
     UInt32 baseOffsetY;
     UInt32 color;
     UInt32 backgroundColor;
 } SLVideoConsole;
-
-#define kSLVideoConsoleMaxNumber 4
-
-static SLVideoConsole gSLVideoConsoles[kSLVideoConsoleMaxNumber];
 
 void SLVideoConsoleSanitizeCursor(SLVideoConsole *console)
 {
@@ -47,6 +43,7 @@ void SLVideoConsoleOutputCharacter(UInt8 character, SLVideoConsole *console)
     outputLocation.y = (console->cursor.y * console->selectedFont->height) + console->baseOffsetY;
     outputLocation.x = (console->cursor.x * console->selectedFont->width ) + console->baseOffsetX;
 
+    // This is just fun sometimes...
     //SLDelayProcessor(25000, !SLBootServicesHaveTerminated());
 
     switch (character)
@@ -70,7 +67,7 @@ void SLVideoConsoleOutputCharacter(UInt8 character, SLVideoConsole *console)
             }
         } break;
         default: {
-            SLGraphicsContextWriteCharacter(console->context, character, outputLocation, console->selectedFont, console->color, console->backgroundColor);
+            SLGraphicsContextWritePrerenderedCharacter(console->context, character, outputLocation, console->selectedFont);
             console->cursor.x++;
         } break;
     }
@@ -78,55 +75,46 @@ void SLVideoConsoleOutputCharacter(UInt8 character, SLVideoConsole *console)
     SLVideoConsoleSanitizeCursor(console);
 }
 
-void SLVCOC(UInt8 c)
-{
-    SLVideoConsoleOutputCharacter(c, &gSLVideoConsoles[0]);
-}
-
-void SLVideoConsoleOutput(UInt8 *string, OSSize size)
+void SLVideoConsoleOutput(UInt8 *string, OSSize size, SLVideoConsole *console)
 {
     for (UInt8 i = 0; i < size; i++)
-    {
-        for (UInt8 j = 0; j < kSLVideoConsoleMaxNumber; j++)
-        {
-            if (!(~gSLVideoConsoles[j].rootConsole.id))
-                return;
-
-            SLVideoConsoleOutputCharacter(string[i], &gSLVideoConsoles[j]);
-        }
-    }
+        SLVideoConsoleOutputCharacter(string[i], console);
 }
 
-UInt8 *SLVideoConsoleInput(OSSize *size, UInt8 finalCharacter)
+UInt8 SLVideoConsoleInput(bool wait, SLVideoConsole *console)
 {
-    return kOSNullPointer;
+    return kOSUTF8Error;
 }
 
-void SLVideoConsoleMoveCursor(SLConsoleLocation location)
+void SLVideoConsoleMoveBackward(OSCount spaces, SLVideoConsole *console)
 {
-    //
+    UInt8 *backspaces = SLAllocate(spaces).address;
+    CXKMemorySetValue(backspaces, spaces, '\b');
+    SLVideoConsoleOutput(backspaces, spaces, console);
+    SLFree(backspaces);
 }
 
-SLConsoleLocation SLVideoConsoleGetCursor(void)
+void SLVideoConsoleDeleteCharacters(OSCount count, SLVideoConsole *console)
 {
-    return gSLVideoConsoles[0].cursor;
-}
-
-void SLVideoConsoleMoveBackward(OSCount spaces)
-{
-    //
-}
-
-void SLVideoConsoleDelete(OSCount characters)
-{
-    //
+    UInt8 *spaces = SLAllocate(count).address;
+    CXKMemorySetValue(spaces, count, '\b');
+    SLVideoConsoleOutput(spaces, count, console);
+    CXKMemorySetValue(spaces, count, ' ');
+    SLVideoConsoleOutput(spaces, count, console);
+    CXKMemorySetValue(spaces, count, '\b');
+    SLVideoConsoleOutput(spaces, count, console);
+    SLFree(spaces);
 }
 
 void __SLVideoConsoleInitAll(void)
 {
+    SLConfigFile *config = SLConfigGet();
+
+    if (!config->dev.videoConsole.enabled)
+        return;
+
     SLGraphicsOutput **screens = SLGraphicsOutputGetAll();
-    SLGraphicsOutput **outputs = screens;
-    OSCount count = 0;
+    UInt8 count = 0;
 
     if (!screens)
     {
@@ -134,70 +122,50 @@ void __SLVideoConsoleInitAll(void)
         return;
     }
 
-    while (*outputs)
+    while (screens)
     {
-        //SLGraphicsOutput *output = (*outputs++);
-        outputs++;
+        SLGraphicsOutput *screen = (*screens++);
         count++;
 
-        /*SLPrintString("Graphics Device [%p]: {\n", output);
-        SLPrintString("    Framebuffer Base: %p\n", output->mode->framebuffer);
-        SLPrintString("    Framebuffer Size: 0x%zX\n", output->mode->framebufferSize);
-        SLPrintString("    Current Mode: %u of %u total modes [%p]\n\n", output->mode->currentMode, output->mode->numberOfModes);
-        SLPrintString("    Modes:");
+        if (count > config->dev.videoConsole.maxScreenCount)
+            break;
 
-        for (OSCount i = 0; i < output->mode->numberOfModes; i++)
-        {
-            SLGraphicsModeInfo *modeInfo = SLGraphicsOutputGetMode(output, (UInt32)i);
-            char *modeName;
+        SLGraphicsContext *context = SLGraphicsOutputGetContextWithMaxSize(screen, config->dev.videoConsole.maxScreenHeight, config->dev.videoConsole.maxScreenWidth);
+        CXKMemorySetValue(context->framebuffer, context->framebufferSize, 0x00);
+        SLVideoConsole *console = SLAllocate(sizeof(SLVideoConsole)).address;
 
-            switch (modeInfo->format)
-            {
-                case kSLGraphicsPixelFormatRGBX8:   modeName = "RGBX_8";  break;
-                case kSLGraphicsPixelFormatBGRX8:   modeName = "BGRX_8";  break;
-                case kSLGraphicsPixelFormatBitMask: modeName = "BitMask"; break;
-                case kSLGraphicsPixelFormatBLT:     modeName = "BLT";     break;
-            }
+        console->selectedFont = &gSLBitmapFont8x16;
+        console->context = context;
+        console->cursor = ((SLGraphicsPoint){0, 0});
 
-            SLPrintString(" {\n");
-            SLPrintString("        %zu: %ux%u\n", (i + 1), modeInfo->width, modeInfo->height);
-            SLPrintString("        Format: %s\n", modeName);
-            SLPrintString("        Pixels per Scanline: %zu\n", modeInfo->pixelsPerScanline);
-            SLPrintString("    }");
+        if (context->isBGRX) {
+            UInt32 backgroundColor = config->dev.videoConsole.backgroundColor;
+            console->backgroundColor = ((backgroundColor & 0xFF0000) >> 16);
+            console->backgroundColor |= (backgroundColor & 0x00FF00);
+            console->backgroundColor |= (backgroundColor & 0x0000FF) << 16;
+
+            UInt32 foregroundColor = config->dev.videoConsole.foregroundColor;
+            console->color = ((foregroundColor & 0xFF0000) >> 16);
+            console->color |= (foregroundColor & 0x00FF00);
+            console->color |= (foregroundColor & 0x0000FF) << 16;
+        } else {
+            console->backgroundColor = config->dev.videoConsole.backgroundColor;
+            console->color = config->dev.videoConsole.foregroundColor;
         }
 
-        SLPrintString("\n} ");*/
+        console->rootConsole.id = 0xFF;
+        console->rootConsole.context = console;
+        console->rootConsole.output = SLVideoConsoleOutput;
+        console->rootConsole.input = SLVideoConsoleInput;
+        console->rootConsole.height = context->height / console->selectedFont->height;
+        console->baseOffsetY =       (context->height % console->selectedFont->height) / 2;
+        console->rootConsole.width  = context->width  / console->selectedFont->width;
+        console->baseOffsetX =       (context->width  % console->selectedFont->width)  / 2;
+        console->rootConsole.deleteCharacters = SLVideoConsoleDeleteCharacters;
+        console->rootConsole.moveBackward = SLVideoConsoleMoveBackward;
+
+        SLRegisterConsole(&console->rootConsole);
     }
-
-    //SLPrintString("\n\n");
-    SLGraphicsContext *context = SLGraphicsOutputGetContextWithMaxSize(screens[0], 900, 1440);
-    CXKMemorySetValue(context->framebuffer, context->framebufferSize, 0x00);
-    /*SLPrintString("Selected Context:\n");
-    SLPrintString("{\n");
-    SLPrintString("    %ux%u\n", context->width, context->height);
-    SLPrintString("    %u from %p\n", context->framebufferSize, context->framebuffer);
-    SLPrintString("    %zu %s Pixels\n", context->pixelCount, (context->isBGRX ? "BGRX" : "RGBX"));
-    SLPrintString("}\n\n");*/
-
-    gSLVideoConsoles[0].selectedFont = &gSLBitmapFont8x16;
-    gSLVideoConsoles[0].context = context;
-    gSLVideoConsoles[0].cursor = ((SLConsoleLocation){0, 0});
-    gSLVideoConsoles[0].backgroundColor = 0x00000000;
-    gSLVideoConsoles[0].color = 0x00FFFFFF;
-
-    gSLVideoConsoles[0].rootConsole.id = 0x00;
-    gSLVideoConsoles[0].rootConsole.output = SLVideoConsoleOutput;
-    gSLVideoConsoles[0].rootConsole.input = SLVideoConsoleInput;
-    gSLVideoConsoles[0].rootConsole.height = context->height / gSLVideoConsoles[0].selectedFont->height;
-    gSLVideoConsoles[0].baseOffsetY = (context->height % gSLVideoConsoles[0].selectedFont->height) / 2;
-    gSLVideoConsoles[0].rootConsole.width = context->width / gSLVideoConsoles[0].selectedFont->width;
-    gSLVideoConsoles[0].baseOffsetX = (context->width % gSLVideoConsoles[0].selectedFont->width) / 2;
-    gSLVideoConsoles[0].rootConsole.moveCursor = SLVideoConsoleMoveCursor;
-    gSLVideoConsoles[0].rootConsole.getCursor = SLVideoConsoleGetCursor;
-    gSLVideoConsoles[0].rootConsole.moveBackward = SLVideoConsoleMoveBackward;
-    gSLVideoConsoles[0].rootConsole.delete = SLVideoConsoleDelete;
-
-    //gSLOutputFunctions[1] = SLVCOC;
 }
 
 #endif /* kCXDebug */

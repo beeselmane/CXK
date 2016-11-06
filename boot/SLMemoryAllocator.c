@@ -206,10 +206,14 @@ OSBuffer SLAllocate(OSSize size)
     while (!(result = SLAllocateInPool(&poolInfo, allocSize)))
     {
         OSCount extendCount = OSAlignUpward(allocSize, kSLBootPageSize);
-        OSBuffer buffer = OSBufferMake(kOSNullPointer, extendCount);
+        OSBuffer buffer = OSBufferMake(SLExpandHeap(extendCount), extendCount);
 
-        buffer.address = SLExpandHeap(extendCount);
-        if (!buffer.address) return kOSBufferEmpty;
+        if (!buffer.address)
+        {
+            SLPrintError("Error: Out of Memory!!\n");
+
+            return kOSBufferEmpty;
+        }
 
         SLExpandPool(&poolInfo, extendCount, buffer.address);
         SLFreeInPool(&poolInfo, buffer);
@@ -218,10 +222,10 @@ OSBuffer SLAllocate(OSSize size)
     (*((OSSize *)result)) = allocSize;
     result += sizeof(OSSize);
 
-    return OSBufferMake(result, allocSize);
+    return OSBufferMake(result, allocSize - sizeof(OSSize));
 }
 
-OSSize SLReallocate(OSAddress object, OSSize newSize)
+OSBuffer SLReallocate(OSAddress object, OSSize newSize)
 {
     if (!SLDoesOwnMemory(object))
     {
@@ -233,12 +237,12 @@ OSSize SLReallocate(OSAddress object, OSSize newSize)
     OSBuffer buffer = OSBufferMake(size, *size);
 
     OSBuffer newBuffer = SLAllocate(newSize);
-    if (!newBuffer.address) return 0;
+    if (OSBufferIsEmpty(newBuffer)) return kOSBufferEmpty;
 
     CXKMemoryCopy(object, newBuffer.address, buffer.size - sizeof(OSSize));
     SLFreeInPool(&poolInfo, buffer);
 
-    return newBuffer.size;
+    return newBuffer;
 }
 
 void SLFree(OSAddress object)

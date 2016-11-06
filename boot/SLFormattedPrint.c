@@ -2,13 +2,12 @@
 #include <System/OSCompilerMacros.h>
 #include <SystemLoader/SLLibrary.h>
 
-typedef UInt32 SLUnicodePoint;
+#define kSLScanBufferSize 1024
 
-static const SLUnicodePoint kSLSurrogateHighBegin  = 0xD800;
-static const SLUnicodePoint kSLSurrogateHighFinish = 0xDBFF;
-static const SLUnicodePoint kSLSurrogateLowBegin   = 0xDC00;
-static const SLUnicodePoint kSLSurrogateLowFinish  = 0xDFFF;
-static const SLUnicodePoint kSLErrorCodePoint = 0xFFFFFFFF;
+static const OSUnicodePoint kSLSurrogateHighBegin  = 0xD800;
+static const OSUnicodePoint kSLSurrogateHighFinish = 0xDBFF;
+static const OSUnicodePoint kSLSurrogateLowBegin   = 0xDC00;
+static const OSUnicodePoint kSLSurrogateLowFinish  = 0xDFFF;
 
 static const UInt8 kSLUTF8ExtraByteCount[0x100] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -38,7 +37,7 @@ static const UInt64 kSLUTF8Excess[6] = {
     0x3F82082080
 };
 
-static const SLUTF8Char kSLUTF8BitMasks[7] = {
+static const OSUTF8Char kSLUTF8BitMasks[7] = {
     0,
     0b00000000,
     0b11000000,
@@ -48,7 +47,7 @@ static const SLUTF8Char kSLUTF8BitMasks[7] = {
     0b11111100
 };
 
-OSPrivate OSCount SLUTF8FromCodePoint(SLUnicodePoint point, SLUTF8Char *output, OSCount count)
+OSPrivate OSCount SLUTF8FromCodePoint(OSUnicodePoint point, OSUTF8Char *output, OSCount count)
 {
     #define next(o, b, p)           \
         b[o] = (p | 0x80) & 0xBF;   \
@@ -67,7 +66,7 @@ OSPrivate OSCount SLUTF8FromCodePoint(SLUnicodePoint point, SLUTF8Char *output, 
         } while (0)
 
     if (point < 0x80) {
-        (*output) = (SLUTF8Char)point;
+        (*output) = (OSUTF8Char)point;
         return 0;
     } else if (point < 0x800) {
         entry(2, count, point, output, {
@@ -98,15 +97,16 @@ OSPrivate OSCount SLUTF8FromCodePoint(SLUnicodePoint point, SLUTF8Char *output, 
     #undef next
 }
 
-OSPrivate SLUnicodePoint SLUTF8ToCodePoint(SLUTF8Char *input, OSCount inCount, OSCount *usedCount)
+OSPrivate OSUnicodePoint SLUTF8ToCodePoint(OSUTF8Char *input, OSCount inCount, OSCount *usedCount)
 {
     OSCount count = kSLUTF8ExtraByteCount[*input];
-    SLUnicodePoint point = 0;
+    OSUnicodePoint point = 0;
 
     if (inCount < count)
     {
         (*usedCount) = inCount;
-        return kSLErrorCodePoint;
+
+        return kOSUTF32Error;
     }
 
     switch (count)
@@ -136,7 +136,7 @@ OSPrivate SLUnicodePoint SLUTF8ToCodePoint(SLUTF8Char *input, OSCount inCount, O
     return point;
 }
 
-OSPrivate OSCount SLUTF16FromCodePoint(SLUnicodePoint point, SLUTF16Char *output, OSCount count)
+OSPrivate OSCount SLUTF16FromCodePoint(OSUnicodePoint point, OSUTF16Char *output, OSCount count)
 {
     if (point < 0x10000) {
         (*output) = point;
@@ -152,122 +152,281 @@ OSPrivate OSCount SLUTF16FromCodePoint(SLUnicodePoint point, SLUTF16Char *output
     return 0;
 }
 
-OSPrivate SLUnicodePoint SLUTF16ToCodePoint(SLUTF16Char *input, OSCount inCount, OSCount *usedCount)
+OSPrivate OSUnicodePoint SLUTF16ToCodePoint(OSUTF16Char *input, OSCount inCount, OSCount *usedCount)
 {
-    SLUTF16Char first = (*input++);
+    OSUTF16Char first = (*input++);
     (*usedCount) = 0;
 
-    if (kSLSurrogateHighBegin <= first && first <= kSLSurrogateHighFinish) {
-        if (!inCount) return kSLErrorCodePoint;
+    if (OSIsBetween(kSLSurrogateHighBegin, first, kSLSurrogateHighFinish)) {
+        if (!inCount) return kOSUTF32Error;
 
-        SLUTF16Char second = (*input);
+        OSUTF16Char second = (*input);
         (*usedCount) = 1;
 
-        if (second <= kSLSurrogateLowBegin || kSLSurrogateLowFinish <= second)
-            return kSLErrorCodePoint;
-
-        return ((SLUnicodePoint)((first << 10) | second) + 0x10000);
-    } else if (kSLSurrogateLowBegin <= first && first <= kSLSurrogateLowFinish) {
-        return kSLErrorCodePoint;
-    } else {
-        return ((SLUnicodePoint)first);
-    }
-}
-
-#if kCXBuildDev
-    bool SLRegisterOutputFunction(SLOutputUTF8 function)
-    {
-        for (UInt8 i = 0; i < 8; i++)
-        {
-            if (!gSLOutputFunctions[i])
-            {
-                gSLOutputFunctions[i] = function;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    void SLDeleteCharacters(OSCount count)
-    {
-        while (count)
-        {
-            SLPrintString("\b");
-            count--;
-        }
-    }
-#endif /* kCXBuildDev */
-
-SLOutputUTF8 gSLOutputFunctions[8] = {
-    kOSNullPointer, kOSNullPointer,
-    kOSNullPointer, kOSNullPointer,
-    kOSNullPointer, kOSNullPointer,
-    kOSNullPointer, kOSNullPointer
-};
-
-static OSLength SLSimpleStringLengthUTF8(SLUTF8Char *string)
-{
-    OSLength length = 0;
-
-    while (*string)
-    {
-        string++;
-        length++;
-    }
-
-    return length;
-}
-
-static OSLength SLSimpleStringLengthUTF16(SLUTF16Char *string)
-{
-    OSLength length = 0;
-
-    while (*string)
-    {
-        string++;
-        length++;
-    }
-
-    return length;
-}
-
-extern void SLLoaderSerial0OutputUTF8(UInt8 character);
-
-OSInline void SLPrintSingle(UInt8 character)
-{
-    for (UInt8 i = 0; gSLOutputFunctions[i] && (i < 8); i++)
-        gSLOutputFunctions[i](character);
-}
-
-OSInline void SLPrintUTF8Single(SLUTF8Char character[7])
-{
-    for (UInt8 i = 0; i < 8; i++)
-    {
-        if (gSLOutputFunctions[i]) {
-            UInt8 n = 0;
-
-            while (character[n])
-            {
-                gSLOutputFunctions[i](character[n]);
-                n++;
-            }
+        if (OSIsBetween(kSLSurrogateLowBegin, second, kSLSurrogateLowFinish)) {
+            return ((OSUnicodePoint)((first << 10) | second) + 0x10000);
         } else {
-            break;
+            return kOSUTF32Error;
+        }
+    } else if (OSIsBetween(kSLSurrogateLowBegin, first, kSLSurrogateLowFinish)) {
+        return kOSUTF32Error;
+    } else {
+        return ((OSUnicodePoint)first);
+    }
+}
+
+OSSize SLUTF16SizeInUTF8(OSUTF16Char *utf16)
+{
+    OSLength stringLength = CXKStringSize16(utf16);
+    OSSize size = 0;
+
+    for (OSCount i = 0; i < stringLength; i++)
+    {
+        OSUTF16Char character = utf16[i];
+
+        if (OSIsBetween(kSLSurrogateHighBegin, character, kSLSurrogateHighFinish)) {
+            if (!((i++) < stringLength)) return kOSSizeError;
+            character = utf16[i];
+
+            if (OSIsBetween(kSLSurrogateLowBegin, character, kSLSurrogateLowFinish)) {
+                size += 2;
+            } else {
+                return kOSSizeError;
+            }
+        } else if (OSIsBetween(kSLSurrogateLowBegin, character, kSLSurrogateLowFinish)) {
+            return kOSSizeError;
+        } else {
+            size++;
+        }
+    }
+
+    return size;
+}
+
+OSSize SLUTF8SizeInUTF16(OSUTF8Char *utf8)
+{
+    OSLength stringLength = CXKStringSize8(utf8);
+    OSSize size = 0;
+
+    for (OSCount i = 0; i < stringLength; i++)
+    {
+        UInt8 extraBytes = kSLUTF8ExtraByteCount[utf8[i]];
+        i += (extraBytes - 1);
+
+        if (extraBytes && (i >= stringLength))
+            return kOSSizeError;
+
+        if (extraBytes >= 2) {
+            size += 2;
+        } else {
+            size++;
+        }
+    }
+
+    return size;
+}
+
+OSUTF8Char *SLUTF16ToUTF8(OSUTF16Char *utf16)
+{
+    OSSize utf8size = SLUTF16SizeInUTF8(utf16);
+    if (utf8size == kOSSizeError) return kOSNullPointer;
+
+    OSUTF8Char *result = SLAllocate((utf8size + 1) * sizeof(OSUTF8Char)).address;
+    OSUTF8Char *utf8 = result;
+
+    OSCount utf16size = CXKStringSize16(utf16);
+    OSUTF8Char *end = result + utf8size;
+    OSCount used;
+
+    while (utf8 < end)
+    {
+        OSUnicodePoint codepoint = SLUTF16ToCodePoint(utf16, utf16size, &used);
+        utf16 += (used + 1);
+
+        used = SLUTF8FromCodePoint(codepoint, utf8, utf8size);
+        utf8 += (used + 1);
+    }
+
+    (*utf8) = 0;
+    return result;
+}
+
+OSUTF16Char *SLUTF8ToUTF16(OSUTF8Char *utf8)
+{
+    OSSize utf16size = SLUTF8SizeInUTF16(utf8);
+    if (utf16size == kOSSizeError) return kOSNullPointer;
+
+    OSUTF16Char *result = SLAllocate((utf16size + 1) * sizeof(OSUTF16Char)).address;
+    OSUTF16Char *utf16 = result;
+
+    OSCount utf8size = CXKStringSize8(utf8);
+    OSUTF16Char *end = result + utf16size;
+    OSCount used;
+
+    while (result != end)
+    {
+        OSUnicodePoint codepoint = SLUTF8ToCodePoint(utf8, utf8size, &used);
+        utf8 += (used + 1);
+
+        used = SLUTF16FromCodePoint(codepoint, utf16, utf16size);
+        utf16 += (used + 1);
+    }
+
+    (*utf16) = 0;
+    return result;
+}
+
+SLConsole *gSLFirstConsole = kOSNullPointer;
+
+SInt8 SLRegisterConsole(SLConsole *console)
+{
+    console->next = kOSNullPointer;
+
+    if (!gSLFirstConsole) {
+        gSLFirstConsole = console;
+        console->id = 0;
+    } else {
+        SLConsole *last = gSLFirstConsole;
+
+        while (last->next)
+            last = last->next;
+
+        console->id = last->id + 1;
+        last->next = console;
+    }
+
+    return console->id;
+}
+
+void SLMoveBackward(OSCount count)
+{
+    SLConsole *console = gSLFirstConsole;
+
+    while (console)
+    {
+        if (console->moveBackward)
+            console->moveBackward(count, console->context);
+
+        console = console->next;
+    }
+}
+
+void SLDeleteCharacters(OSCount count)
+{
+    SLConsole *console = gSLFirstConsole;
+
+    while (console)
+    {
+        if (console->deleteCharacters) {
+            console->deleteCharacters(count, console->context);
+        } else if (console->moveBackward && console->output) {
+            console->moveBackward(count, console->context);
+            OSUTF8Char *spaces = SLAllocate(count).address;
+            CXKMemorySetValue(spaces, count, ' ');
+            console->output(spaces, count, console->context);
+            SLFree(spaces);
+            console->moveBackward(count, console->context);
+        }
+
+        console = console->next;
+    }
+}
+
+UInt8 *SLScanString(UInt8 terminator, OSSize *size)
+{
+    UInt8 string[kSLScanBufferSize];
+    OSIndex i = 0;
+
+    for ( ; ; )
+    {
+        SLConsole *console = gSLFirstConsole;
+
+        while (console)
+        {
+            if (console->input)
+            {
+                UInt8 read = console->input(false, console->context);
+
+                if (read != kOSUTF8Error)
+                {
+                    if (read == terminator) {
+                        string[i++] = 0;
+
+                        OSUTF8Char *result = SLAllocate(i).address;
+                        CXKMemoryCopy(string, result, i);
+                        return result;
+                    } else {
+                        string[i++] = read;
+                    }
+                }
+            }
+
+            console = console->next;
         }
     }
 }
 
-OSInline void SLPrintNumber(UInt64 number, UInt8 base, UInt8 hexBegin, UInt8 padding)
+OSInline void SLPrintChars(OSUTF8Char *source, OSCount count)
 {
-    SLUTF8Char  buffer[32];
+    SLConsole *console = gSLFirstConsole;
+
+    while (console)
+    {
+        if (console->output)
+            console->output(source, count, console->context);
+
+        console = console->next;
+    }
+}
+
+OSUTF8Char *SLUIDToString(SLProtocol *uid)
+{
+    return SLPrintToString("%08X-%04X-%04X-%02X%02X%02X%02X%02X%02X%02X%02X",
+               uid->group0, uid->group1, uid->group2,
+               uid->group3[0], uid->group3[1], uid->group3[2], uid->group3[3],
+               uid->group3[4], uid->group3[5], uid->group3[6], uid->group3[7]);
+}
+
+void SLNumberToStringConverter(SInt64 n, bool isSigned, UInt8 base, UInt8 padding, UInt8 hexStart, bool shouldPrint, OSLength *length, OSUTF8Char **string)
+{
+    if (!shouldPrint && !string)
+        SLUnrecoverableError();
+
+    bool prependNegative = false;
+    OSUTF8Char buffer[32];
+    UInt8 offset = 0;
+    UInt64 number;
     SInt8 i = 0;
+
+    if (isSigned && (n < 0)) {
+        prependNegative = true;
+        number = -n;
+    } else {
+        number = n;
+    }
 
     if (!number)
     {
-        if (padding)
-            for ( ; i < padding; i++)
-                SLPrintSingle('0');
+        if (!shouldPrint && length) (*length) = padding;
+
+        if (padding) {
+            if (!shouldPrint) {
+                (*string) = SLAllocate(padding + 1).address;
+                CXKMemorySetValue((*string), padding, '0');
+                (*string)[padding] = 0;
+            } else {
+                OSUTF8Char *zeros = SLAllocate(padding).address;
+                CXKMemorySetValue(zeros, padding, '0');
+                SLPrintChars(zeros, padding);
+                SLFree(zeros);
+            }
+        } else {
+            if (!shouldPrint)
+            {
+                (*string) = SLAllocate(1).address;
+                (*string)[0] = 0;
+            }
+        }
 
         return;
     }
@@ -275,33 +434,155 @@ OSInline void SLPrintNumber(UInt64 number, UInt8 base, UInt8 hexBegin, UInt8 pad
     do {
         UInt8 next = number % base;
         number /= base;
-
+        
         if (next < 10) {
             buffer[i++] = next + '0';
         } else if (next < 37) {
-            buffer[i++] = (next - 10) + hexBegin;
+            buffer[i++] = (next - 10) + hexStart;
         } else {
             buffer[i++] = '#';
         }
     } while (number);
 
-    if (i < padding)
-    {
-        UInt8 zeroCount = padding - i;
+    if (i < padding) {
+        UInt8 zeroCount = (padding - i);
 
-        for (UInt8 j = 0; j < zeroCount; j++)
-            SLPrintSingle('0');
+        if (!shouldPrint) {
+            if (length) (*length) = padding;
+
+            (*string) = SLAllocate(padding + 1).address;
+            (*string)[padding] = 0;
+
+            if (prependNegative) {
+                CXKMemorySetValue((*string) + 1, zeroCount - 1, '0');
+                (*string)[0] = '-';
+            } else {
+                CXKMemorySetValue((*string), zeroCount, '0');
+            }
+
+            offset = zeroCount;
+        } else {
+            if (prependNegative)
+            {
+                SLPrintChars((OSUTF8Char *)"-", 1);
+                zeroCount--;
+            }
+
+            OSUTF8Char *zeros = SLAllocate(zeroCount).address;
+            CXKMemorySetValue(zeros, zeroCount, '0');
+            SLPrintChars(zeros, zeroCount);
+            SLFree(zeros);
+        }
+    } else {
+        if (prependNegative) {
+            if (!shouldPrint) {
+                if (length) (*length) = (i + 1);
+
+                (*string) = SLAllocate(i + 2).address;
+                (*string)[i + 1] = 0;
+                (*string)[0] = '-';
+                offset = 1;
+            } else {
+                SLPrintChars((OSUTF8Char *)"-", 1);
+            }
+        } else {
+            if (!shouldPrint)
+            {
+                if (length) (*length) = i;
+                
+                (*string) = SLAllocate(i + 1).address;
+                (*string)[i] = 0;
+                offset = 0;
+            }
+        }
     }
 
-    for (i--; i >= 0; i--)
-        SLPrintSingle(buffer[i]);
+    if (!shouldPrint) {
+        for (i--; i >= 0; i--)
+            string[offset++] = buffer[i];
+    } else {
+        OSUTF8Char finalBuffer[30];
+        UInt8 toCopy = i;
+        offset = 0;
+
+        for (i--; i >= 0; i--)
+            finalBuffer[offset++] = buffer[i];
+
+        SLPrintChars(finalBuffer, toCopy);
+    }
+}
+
+OSUTF8Char *SLNumberToString(SInt64 n, bool isSigned, UInt8 base, UInt8 padding, UInt8 hexStart, OSLength *length)
+{
+    OSUTF8Char *string;
+
+    SLNumberToStringConverter(n, isSigned, base, padding, hexStart, false, length, &string);
+
+    return string;
+}
+
+OSUTF8Char *SLPrintToString(const char *format, ...)
+{
+    OSVAList args;
+    OSVAStart(args, format);
+    OSUTF8Char *result = SLPrintToStringFromList(format, args);
+    OSVAFinish(args);
+
+    return result;
+}
+
+void SLPrintString(const char *format, ...)
+{
+    OSVAList args;
+    OSVAStart(args, format);
+    SLPrintStringFromList(format, args);
+    OSVAFinish(args);
+}
+
+void SLConsoleCountOutputLength(OSUTF8Char *string, OSLength length, OSLength *previous)
+{
+    (*previous) += length;
+}
+
+void SLConsolePrintToStringOutput(OSUTF8Char *newChars, OSLength length, OSUTF8Char **string)
+{
+    CXKMemoryCopy(newChars, (*string), length);
+    (*string) += length;
+}
+
+OSUTF8Char *SLPrintToStringFromList(const char *format, OSVAList args)
+{
+    OSVAList *copy = kOSNullPointer;
+    OSVACopy(copy, args);
+    OSLength length;
+
+    SLConsole *firstConsole = gSLFirstConsole;
+    SLConsole lengthConsole;
+    lengthConsole.output = SLConsoleCountOutputLength;
+    lengthConsole.context = &length;
+    gSLFirstConsole = &lengthConsole;
+    SLPrintStringFromList(format, copy);
+    length++;
+
+    OSUTF8Char *string = SLAllocate(length).address;
+    OSUTF8Char *stringCopy = string;
+
+    SLConsole printConsole;
+    printConsole.output = SLConsolePrintToStringOutput;
+    printConsole.context = &stringCopy;
+    gSLFirstConsole = &printConsole;
+    SLPrintStringFromList(format, args);
+    string[length] = 0;
+
+    gSLFirstConsole = firstConsole;
+    return string;
 }
 
 #if !kCXBuildDev
     #undef SLPrintString
 #endif /* !kCXBuildDev */
 
-OSPrivate void SLPrintString(const char *s, ...)
+void SLPrintStringFromList(const char *format, OSVAList args)
 {
     bool justEnteredEscapeCode = false;
     bool inEscapeCode = false;
@@ -316,24 +597,20 @@ OSPrivate void SLPrintString(const char *s, ...)
     UInt8 padding = 1;
     UInt8 base = 10;
 
-    OSVAList args;
-    OSVAStart(args, s);
+    OSCount charsToPrint = 0;
 
-    while (*s)
+    while (*format)
     {
-        UInt8 c = *s++;
-
-        if (!inEscapeCode && c != '%')
-        {
-            SLPrintSingle(c);
-
-            continue;
-        }
+        UInt8 c = (*format++);
 
         if (!inEscapeCode)
         {
-            justEnteredEscapeCode = true;
-            inEscapeCode = true;
+            if (c == '%'){
+                justEnteredEscapeCode = true;
+                inEscapeCode = true;
+            } else {
+                charsToPrint++;
+            }
 
             continue;
         }
@@ -345,10 +622,14 @@ OSPrivate void SLPrintString(const char *s, ...)
             if (c == '%')
             {
                 inEscapeCode = false;
-                SLPrintSingle(c);
-
-                continue;
+                charsToPrint++;
             }
+
+            OSUTF8Char *source = format - (charsToPrint + 2);
+            SLPrintChars(source, charsToPrint);
+            charsToPrint = 0;
+
+            if (c == '%') continue;
         }
 
         // Yes, I realize that this will allow an
@@ -420,8 +701,7 @@ OSPrivate void SLPrintString(const char *s, ...)
                 base = 16;
             } break;
             case 'p': {
-                SLPrintSingle('0');
-                SLPrintSingle('x');
+                SLPrintChars((OSUTF8Char *)"0x", 2);
 
                 inEscapeCode = false;
                 printNumber = true;
@@ -433,40 +713,29 @@ OSPrivate void SLPrintString(const char *s, ...)
                 UInt8 character = OSVAGetNext(args, UInt32);
                 inEscapeCode = false;
 
-                SLPrintSingle(character);
+                SLPrintChars(&character, 1);
             } break;
             case 's': {
                 inEscapeCode = false;
-                SLUTF8Char *utf8string = OSVAGetNext(args, SLUTF8Char *);
-                OSCount charsLeft = SLSimpleStringLengthUTF8(utf8string);
 
-                while (charsLeft)
-                {
-                    SLPrintSingle(*utf8string++);
-                    charsLeft--;
-                }
+                OSUTF8Char *utf8string = OSVAGetNext(args, OSUTF8Char *);
+                SLPrintChars(utf8string, CXKStringSize8(utf8string));
             } break;
             case 'S': {
                 inEscapeCode = false;
-                SLUTF16Char *utf16string = OSVAGetNext(args, SLUTF16Char *);
-                OSCount charsLeft = SLSimpleStringLengthUTF16(utf16string);
-                OSCount used, used8;
-                SLUTF8Char utf8[7];
 
-                while (charsLeft)
+                OSUTF16Char *utf16string = OSVAGetNext(args, OSUTF16Char *);
+                OSUTF8Char *utf8string = SLUTF16ToUTF8(utf16string);
+
+                if (!utf8string)
                 {
-                    SLUnicodePoint point = SLUTF16ToCodePoint(utf16string, charsLeft, &used);
-                    if (point == kSLErrorCodePoint) break;
-                    used++;
+                    SLPrintChars((OSUTF8Char *)"<error>", 7);
 
-                    used8 = SLUTF8FromCodePoint(point, utf8, 6);
-                    utf8[used8 + 1] = 0;
-
-                    utf16string += used;
-                    charsLeft -= used;
-
-                    SLPrintUTF8Single(utf8);
+                    break;
                 }
+
+                SLPrintChars(utf8string, CXKStringSize8(utf8string));
+                SLFree(utf8string);
             } break;
             // Extension to print a hex string
             // from a given address
@@ -513,6 +782,7 @@ OSPrivate void SLPrintString(const char *s, ...)
                     number = (*arg);                \
                     argument += sizeof(UInt ## l);  \
                 } break
+
                 switch (argSize)
                 {
                     case 1: entry(8);
@@ -520,21 +790,26 @@ OSPrivate void SLPrintString(const char *s, ...)
                     case 4: entry(32);
                     case 8: entry(64);
                 }
+
                 #undef entry
 
-                SLPrintNumber(number, 16, 'A', argSize * 2);
-                if (padding != 1) SLPrintSingle(' ');
+                SLNumberToStringConverter(number, false, 16, (argSize * 2), 'A', true, kOSNullPointer, kOSNullPointer);
+
+                if (padding != 1)
+                    SLPrintChars((OSUTF8Char *)" ", 1);
+
                 padding--;
             }
 
             hexDump = false;
+            lastFlag = 0;
             argSize = 4;
             padding = 1;
         }
 
         if (printNumber)
         {
-            UInt64 number;
+            SInt64 number;
 
             if (!printSign) {
                 switch (argSize)
@@ -550,39 +825,36 @@ OSPrivate void SLPrintString(const char *s, ...)
                     default: number = 0;
                 }
             } else {
-                SInt64 signedValue;
-
                 switch (argSize)
                 {
                     case 1:
                     case 2:
                     case 4:
-                        signedValue = OSVAGetNext(args, SInt32);
+                        number = OSVAGetNext(args, SInt32);
                     break;
                     case 8:
-                        signedValue = OSVAGetNext(args, SInt64);
+                        number = OSVAGetNext(args, SInt64);
                     break;
-                    default: signedValue = 0;
+                    default: number = 0;
                 }
-
-                if (signedValue < 0)
-                {
-                    signedValue *= -1;
-
-                    SLPrintSingle('-');
-                }
-
-                printSign = false;
-                number = signedValue;
             }
 
-            SLPrintNumber(number, base, hexBase, padding);
+            SLNumberToStringConverter(number, printSign, base, padding, hexBase, true, kOSNullPointer, kOSNullPointer);
+
             printNumber = false;
+            printSign = false;
+            lastFlag = 0;
             padding = 1;
         }
     }
 
-    OSVAFinish(args);
+    if (charsToPrint)
+    {
+        OSUTF8Char *source = (format - charsToPrint);
+        SLPrintChars(source, charsToPrint);
+    }
+
+    #undef kSLCopyArgs
 }
 
 #if !kCXTargetOSApple

@@ -24,7 +24,7 @@ void SLTestFormattedPrint(void)
     SLPrintString("0x20C\n%p\n",                     (OSAddress)0x20C);
     SLPrintString("1234 5678 09AB CDEF\n%h04H\n",    data);
     SLPrintString("%%\n%%\n");
-    SLPrintString("\n\n");
+    SLPrintString("\n");
 }
 
 void SLDumpHeapInfo(SLHeap *heap)
@@ -62,13 +62,10 @@ void SLDumpPoolInfo(SLMemoryPool *pool)
 
 void SLTestAllocate(void)
 {
-    OSSize heapSize0, heapSize1, heapSize2;
-    OSSize heapFullSize;
-    OSAddress heapBase;
-
     OSAddress alloc0base, alloc1base, alloc2base;
     OSAddress alloc0size, alloc1size, alloc2size;
 
+    SLDumpHeapInfo(SLMemoryAllocatorGetRealHeap());
     SLDumpPoolInfo(SLMemoryAllocatorGetMainPool());
 
     OSBuffer a = SLAllocate(15);
@@ -106,13 +103,11 @@ void SLTestMemoryOps(void)
     OSSize s = 256;
 
     OSBuffer a = SLAllocate(s);
-    SLPrintString("Alloc'd {%zu from %p}\n", a.size, a.address);
-
     OSBuffer b = SLAllocate(s);
-    SLPrintString("Alloc'd {%zu from %p}\n", b.size, b.address);
 
     CXKMemorySetValue(a.address, s, 0xCA);
     CXKMemorySetValue(b.address, s, 0xDB);
+    SLPrintString("Memory Compare: %hd\n", CXKMemoryCompare(a.address, b.address, s));
 
     CXKMemoryCopy(a.address, b.address, s);
     OSAddress aa = a.address;
@@ -123,21 +118,18 @@ void SLTestMemoryOps(void)
         UInt64 *ap = (UInt64 *)aa;
         UInt64 *bp = (UInt64 *)ba;
 
-        SLPrintString("%08X %08X %08X %08X\n%08X %08X %08X %08X\n\n",
-            ap[0], ap[1], ap[2], ap[3],
-            bp[0], bp[1], bp[2], bp[3]);
+        SLPrintString("%04llH\n%04llH\n", ap, bp);
 
         aa += (4 * sizeof(UInt64));
         ba += (4 * sizeof(UInt64));
     }
 
-    SLPrintString("Freeing {%zu from %p}\n", b.size, b.address);
+    SLPrintString("Memory Compare: %hd\n\n", CXKMemoryCompare(a.address, b.address, s));
     SLFree(b.address);
-    SLPrintString("Freeing {%zu from %p}\n", a.size, a.address);
     SLFree(a.address);
 }
 
-#define SLPrintStringTest(l) SLPrintString("%zu, %zu, %zu, %zu, %zu\n", CXKStringLength ## l(utf ## l ## string0), CXKStringLength ## l(utf ## l ## string1), CXKStringLength ## l(utf ## l ## string2), CXKStringLength ## l(utf ## l ## string3), CXKStringLength ## l(utf ## l ## string4))
+#define SLPrintStringTest(l) SLPrintString("%zu, %zu, %zu, %zu, %zu\n", CXKStringSize ## l(utf ## l ## string0), CXKStringSize ## l(utf ## l ## string1), CXKStringSize ## l(utf ## l ## string2), CXKStringSize ## l(utf ## l ## string3), CXKStringSize ## l(utf ## l ## string4))
 
 void SLTestStringLengths(void)
 {

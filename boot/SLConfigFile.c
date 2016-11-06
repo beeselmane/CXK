@@ -1,155 +1,61 @@
 #include <SystemLoader/SystemLoader.h>
-#include <SystemLoader/SLSerial.h>
 #include <Kernel/CXKMemory.h>
 
-typedef struct {
-    SLConfigInteger port;
-    SLConfigInteger baudDivisor;
-    SLConfigInteger wordLength;
-    SLConfigInteger stopBits;
-    SLConfigInteger parity;
-} SLConfigPlaneSerial;
+SLConfigFile *gSLCurrentConfig = kOSNullPointer;;
 
-typedef struct {
-    SLConfigInteger postCode;
-    bool enableRelocaction;
-    SLConfigInteger loadAddress;
-} SLConfigPlaneKernelDev;
-
-typedef struct {
-    bool enableScreenConsole;
-    bool enableSerialConsole;
-} SLConfigPlaneConsoleDev;
-
-typedef struct {
-    SLConfigString bootFile;
-} SLConfigPlaneLoaderDev;
-
-typedef struct {
-    SLConfigPlaneLoaderDev  loader;
-    SLConfigPlaneConsoleDev console;
-    SLConfigPlaneKernelDev  kernel;
-    SLConfigPlaneSerial     serial;
-} SLConfigPlaneDev;
-
-typedef struct {
-    //
-} SLConfigPlaneKernel;
-
-typedef struct {
-    //
-} SLConfigPlaneLoader;
-
-struct __SLConfigFile {
-    SLConfigPlaneLoader loader;
-    SLConfigPlaneKernel kernel;
-    SLConfigPlaneDev    dev;
-};
-
-SLConfigFile gSLMainConfig;
-
-SLConfigFile *SLConfigFileLoad(SLString path)
+SLConfigFile *SLConfigLoad(OSUTF8Char *path)
 {
-    #if kCXBuildDev
-        gSLMainConfig.dev.loader.bootFile = "/boot.car";
+    if (gSLCurrentConfig) SLFree(gSLCurrentConfig);
+    gSLCurrentConfig = SLAllocate(sizeof(SLConfigFile)).address;
 
-        gSLMainConfig.dev.console.enableScreenConsole = false;
-        gSLMainConfig.dev.console.enableSerialConsole = true;
+    if (kCXBuildDev)
+    {
+        gSLCurrentConfig->dev.videoConsole.maxScreenCount = 255;
+        gSLCurrentConfig->dev.videoConsole.maxScreenHeight = 0xFFFF;
+        gSLCurrentConfig->dev.videoConsole.maxScreenWidth = 0xFFFF;
+        gSLCurrentConfig->dev.videoConsole.backgroundColor = 0x000000;
+        gSLCurrentConfig->dev.videoConsole.foregroundColor = 0xFFFFFF;
+        gSLCurrentConfig->dev.videoConsole.enabled = true;
 
-        gSLMainConfig.dev.kernel.postCode = 0xCC;
-        gSLMainConfig.dev.kernel.enableRelocaction = true;
-        gSLMainConfig.dev.kernel.loadAddress = 0xFFFFFFFFFFFFFFFF;
+        gSLCurrentConfig->dev.serialConsole.ports = SLAllocate(sizeof(SLSerialPort)).address;
+        gSLCurrentConfig->dev.serialConsole.ports[0] = 0x03F8;
+        gSLCurrentConfig->dev.serialConsole.portCount = 1;
+        gSLCurrentConfig->dev.serialConsole.baudRate = 57600;
+        gSLCurrentConfig->dev.serialConsole.worldLength = kSLSerialWordLength8Bits;
+        gSLCurrentConfig->dev.serialConsole.parityType = kSLSerialNoParity;
+        gSLCurrentConfig->dev.serialConsole.stopBits = kSLSerial1StopBit;
+        gSLCurrentConfig->dev.serialConsole.enabled = true;
 
-        gSLMainConfig.dev.serial.port = 0x03F8;
-        gSLMainConfig.dev.serial.baudDivisor = 2;
-        gSLMainConfig.dev.serial.wordLength = kSLSerialWordLength8Bits;
-        gSLMainConfig.dev.serial.stopBits = kSLSerial1StopBit;
-        gSLMainConfig.dev.serial.parity = kSLSerialNoParity;
-    #endif /* kCXBuildDev */
+        gSLCurrentConfig->dev.memoryConsole.size = (1 << 18);         // 258 KiB
+        gSLCurrentConfig->dev.memoryConsole.scrollAmount = (1 << 10); // 1 KiB
+        gSLCurrentConfig->dev.memoryConsole.defaultBackingPath = (OSUTF8Char *)kSLLoaderDataDirectory "/SLMemoryConsole.log";
+        gSLCurrentConfig->dev.memoryConsole.enabled = false;
 
-    return SLConfigGet();
+        gSLCurrentConfig->dev.fileConsole.paths = kOSNullPointer;
+        gSLCurrentConfig->dev.fileConsole.pathCount = 0;
+        gSLCurrentConfig->dev.fileConsole.mode = kSLFileConsoleModeCreateNew;
+        gSLCurrentConfig->dev.fileConsole.enabled = false;
+
+        gSLCurrentConfig->dev.bootFile = (OSUTF8Char *)"/boot.car";
+    }
+
+    gSLCurrentConfig->config.rootParitionID = ((OSUIDIntelData){0x00000000, 0x0000, 0x0000, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}});
+
+    gSLCurrentConfig->dev.videoConsole.maxScreenWidth = 1440;
+    gSLCurrentConfig->dev.videoConsole.maxScreenHeight = 900;
+    gSLCurrentConfig->dev.videoConsole.maxScreenCount = 1;
+
+    SLFile *file = SLOpenPath(path);
+    if (!file) return gSLCurrentConfig;
+
+    SLCloseFile(file);
+    return gSLCurrentConfig;
 }
 
 SLConfigFile *SLConfigGet(void)
 {
-    return &gSLMainConfig;
-}
+    if (!gSLCurrentConfig)
+        SLConfigLoad((OSUTF8Char *)kSLLoaderDataDirectory "/" kSLLoaderConfigFile);
 
-void SLConfigSet(SLConfigFile *config)
-{
-    CXKMemoryCopy(config, &gSLMainConfig, sizeof(SLConfigFile));
-}
-
-bool SLSimpleStringCompare(const char *restrict s1, const char *restrict s2)
-{
-    for ( ; (*s2) && (*s1) == (*s2); s1++, s2++);
-    return !((*s1) ^ (*s2));
-}
-
-SLConfigString SLConfigGetString(SLConfigPath path, SLStringEncoding encoding)
-{
-    SLConfigString string = kOSNullPointer;
-
-    if (kCXBuildDev)
-    {
-        if (SLSimpleStringCompare(path, "dev.loader.bootFile"))
-            string = gSLMainConfig.dev.loader.bootFile;
-    }
-
-    if (!string) return kOSNullPointer;
-
-    if (encoding == kSLStringEncodingUTF8) {
-        return string;
-    } else if (encoding == kSLStringEncodingUTF16) {
-        // Need to convert from UTF-8
-        return kOSNullPointer;
-    } else {
-        return kOSNullPointer;
-    }
-}
-
-SLConfigInteger SLConfigGetInteger(SLConfigPath path)
-{
-    if (kCXBuildDev)
-    {
-        if (SLSimpleStringCompare(path, "dev.kernel.postCode"))
-            return gSLMainConfig.dev.kernel.postCode;
-
-        if (SLSimpleStringCompare(path, "dev.kernel.loadAddress"))
-            return gSLMainConfig.dev.kernel.loadAddress;
-
-        if (SLSimpleStringCompare(path, "dev.serial.port"))
-            return gSLMainConfig.dev.serial.port;
-
-        if (SLSimpleStringCompare(path, "dev.serial.baudDivisor"))
-            return gSLMainConfig.dev.serial.baudDivisor;
-
-        if (SLSimpleStringCompare(path, "dev.serial.wordLength"))
-            return gSLMainConfig.dev.serial.wordLength;
-
-        if (SLSimpleStringCompare(path, "dev.serial.stopBits"))
-            return gSLMainConfig.dev.serial.stopBits;
-
-        if (SLSimpleStringCompare(path, "dev.serial.parity"))
-            return gSLMainConfig.dev.serial.parity;
-    }
-
-    return 0;
-}
-
-bool SLConfigGetBoolean(SLConfigPath path)
-{
-    if (kCXBuildDev)
-    {
-        if (SLSimpleStringCompare(path, "dev.console.enableScreenConsole"))
-            return gSLMainConfig.dev.console.enableScreenConsole;
-
-        if (SLSimpleStringCompare(path, "dev.console.enableSerialConsole"))
-            return gSLMainConfig.dev.console.enableSerialConsole;
-
-        if (SLSimpleStringCompare(path, "dev.kernel.enableRelocaction"))
-            return gSLMainConfig.dev.kernel.enableRelocaction;
-    }
-
-    return false;
+    return gSLCurrentConfig;
 }
